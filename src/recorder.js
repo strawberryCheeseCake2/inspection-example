@@ -1,23 +1,27 @@
+export const HISTORY_LIMIT = 3000
+
 // Serialized into the sketch iframe alongside its runtime.
-export function createRecorder(send, snapshot, trace, context) {
+export function createRecorder(send, snapshot, trace, context, functions, limit) {
   let cycle = 0
   let active = false
   let sequence = 0
   let pending = []
   let scheduled = false
   let capturing = false
-  let counts = new Map()
-  let renderCounts = new Map()
-  const labels = new Map()
-  let rootBindings
+  const sites = new Map(functions.map((site) => [site.functionId, site]))
+
+  function sendPending() {
+    if (!pending.length) return
+    send({ type: 'steps', cycle: pending[0].cycle, steps: pending.slice(-limit) })
+    pending = []
+  }
 
   function flush() {
     if (scheduled) return
     scheduled = true
     queueMicrotask(() => {
       scheduled = false
-      send({ type: 'steps', cycle: pending[0].cycle, steps: pending })
-      pending = []
+      sendPending()
     })
   }
 
@@ -53,35 +57,27 @@ export function createRecorder(send, snapshot, trace, context) {
     return result.length > 1600 ? result.slice(0, 1599) + '…' : result
   }
 
-  function capture(label, line, bindings, baseId = null, stepCycle = cycle) {
+  function capture({ label, line, endLine, functionId }, bindings, baseId = null, stepCycle = cycle) {
     if (capturing || !Number.isInteger(line) || (!active && baseId === null)) return
     capturing = true
     try {
       const state = snapshot()
-      const { event } = context()
-      const variables = Object.fromEntries(((bindings ?? rootBindings)?.() ?? []).map(([name, read]) => {
+      const { event, canvasCursor, readOnly } = context()
+      const variables = Object.fromEntries((bindings ?? []).map(([name, read]) => {
         // A declared binding can be in scope before its initializer has run.
         try { return [name, describe(read())] } catch { return [name, '[Unavailable]'] }
       }))
-      if (pending.length && pending[0].cycle !== stepCycle) pending = []
+      if (pending.length && pending[0].cycle !== stepCycle) sendPending()
       pending.push({
-        id: ++sequence, cycle: stepCycle, event, label, line, variables,
+        id: ++sequence, cycle: stepCycle, event, label, line, endLine, functionId, variables, canvasCursor, readOnly,
         state: JSON.parse(state),
         baseId,
       })
+      if (pending.length >= 2 * limit) pending = pending.slice(-limit)
       flush()
     } finally {
       capturing = false
     }
-  }
-
-  function point(line, site, bindings) {
-    if (!active || capturing || context().preview) return
-    const count = (counts.get(site) ?? 0) + 1
-    counts.set(site, count)
-    // Keep the first visit and sample repeats within a single callback.
-    const label = labels.get(site)
-    if (label || (count & (count - 1)) === 0) capture(label ?? `Line ${line}`, line, bindings)
   }
 
   return {
@@ -93,24 +89,22 @@ export function createRecorder(send, snapshot, trace, context) {
     },
     begin() {
       cycle++
-      counts = new Map()
-      renderCounts = new Map()
       active = true
     },
     end() { active = false },
-    label(site, label) { labels.set(site, label) },
-    register(bindings) { rootBindings = bindings },
-    callback(rendering = false) { counts = rendering ? renderCounts : new Map() },
     capture,
-    point,
-    result(value, line, site, bindings) {
-      point(line, site, bindings)
-      return value
+    enter() {
+      return active && !capturing && !context().preview ? { cycle } : null
     },
-    step(line, _site, bindings) {
-      return (label) => {
-        if (!context().preview) capture(String(label).slice(0, 100), line, bindings)
-      }
+    block(call, bindings) {
+      call.blocks ??= new Map()
+      for (const [name, read] of bindings) call.blocks.set(name, read)
+    },
+    finish(call, functionId) {
+      if (!call || call.cycle !== cycle || !active || capturing || context().preview) return
+      const { name, line, endLine } = sites.get(functionId)
+      const bindings = [...(call.blocks ?? []), ...(call.bindings?.() ?? [])]
+      capture({ label: `${name}()`, line, endLine, functionId }, bindings)
     },
   }
 }

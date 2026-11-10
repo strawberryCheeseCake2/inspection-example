@@ -5,8 +5,8 @@ import { Icon } from './components/Icon.jsx'
 import { Preview } from './components/Preview.jsx'
 import { RuntimeState } from './components/RuntimeState.jsx'
 import { sketches } from './sketches/index.js'
-import { localAnalysis, reportForLines } from './trace.js'
-import { readHistory, replayForReport } from './historyRestore.js'
+import { localAnalysis, reportForSelection } from './trace.js'
+import { hasDrawing, readHistory, replayForReport } from './historyRestore.js'
 import { useInspector } from './useInspector.js'
 import './style.css'
 
@@ -134,7 +134,7 @@ function App() {
     try {
       const body = { concern: prompt }
       if (task === 'edit') Object.assign(body, { source, debugSource })
-      if (task === 'analyze') body.source = run.source
+      if (task === 'analyze') Object.assign(body, { source: run.source, debugSource: run.debugSource })
       const result = await request(task, body, controller.signal)
       if (controller.signal.aborted) return
       if (task === 'generate') {
@@ -148,11 +148,23 @@ function App() {
         const changed = result.source !== source || result.debugSource !== debugSource
         setRequestNotice(changed ? '코드를 수정했습니다. 실행을 눌러 확인하세요.' : '현재 코드에 변경 사항이 없습니다.')
       } else {
-        const report = reportForLines(result, recorded)
+        const report = reportForSelection(result, recorded)
         inspector.applyReport(report, recorded)
         const replay = replayForReport(run.debugSource, recorded, report)
         try {
+          const drawingSteps = replay.steps.filter(({ canvasCursor }) => Number.isInteger(canvasCursor))
+          let missingDrawing = false
+          if (drawingSteps.length) {
+            replay.drawings = await inspector.exportDrawing(drawingSteps, controller.signal) ?? []
+            replay.steps = replay.steps.map((step) => {
+              if (!Number.isInteger(step.canvasCursor) || hasDrawing(replay.drawings, step.canvasCursor)) return step
+              missingDrawing = true
+              return { ...step, canvasCursor: null }
+            })
+          }
+          controller.signal.throwIfAborted()
           await request('analyze/replay', { historyRef: result.historyRef, replay }, controller.signal)
+          if (missingDrawing) setRequestNotice('스텝은 저장했지만 일부 화면의 캔버스 명령이 남아 있지 않아요.')
         } catch {
           if (!controller.signal.aborted) setRequestNotice('분석은 완료됐지만 재생 기록을 저장하지 못했어요.')
         }
@@ -214,7 +226,8 @@ function App() {
       </form>
       <div className="workspace">
         <Editor source={source} debugSource={debugSource} setSource={changeSource} file={sketch.file}
-          line={inspector.live ? null : step?.line} dirty={source !== run.source || debugSource !== run.debugSource}
+          line={inspector.live ? null : step?.line} endLine={step?.endLine}
+          dirty={source !== run.source || debugSource !== run.debugSource}
           run={() => restart(source, debugSource)} />
         <div className="inspection" inert={busy === 'analyze' ? true : undefined}>
           <Preview {...inspector} onReset={() => restart(run.source, run.debugSource)} />

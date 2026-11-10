@@ -3,8 +3,9 @@ import { createHistory, readAnalysisHistory, saveHistory } from './ai-history.js
 import sketchContract from './prompts/generate.js'
 import editInstructions from './prompts/edit.js'
 import analysisInstructions from './prompts/analyze.js'
-import { instrument } from '../src/instrument.js'
+import { instrument, isDebugCandidate } from '../src/instrument.js'
 import { readHistory } from '../src/historyRestore.js'
+import { MAX_CYCLES } from '../src/trace.js'
 
 const string = { type: 'string' }
 const object = (properties) => ({
@@ -18,10 +19,12 @@ const revision = object({
 })
 const analysis = object({
   summary: string,
-  lines: {
+  cycleCount: { type: 'integer', minimum: 1, maximum: MAX_CYCLES },
+  cycleReason: string,
+  functions: {
     type: 'array',
     items: object({
-      line: { type: 'integer' },
+      functionId: { type: 'integer' },
       note: string,
       paths: { type: 'array', items: string },
     }),
@@ -31,7 +34,7 @@ const analysis = object({
 const tasks = {
   generate: { schema: generation, instructions: sketchContract, maxTokens: 8000 },
   edit: { schema: revision, instructions: editInstructions, maxTokens: 8000 },
-  analyze: { schema: analysis, instructions: analysisInstructions, maxTokens: 4000 },
+  analyze: { schema: analysis, instructions: analysisInstructions(MAX_CYCLES), maxTokens: 4000 },
 }
 
 const validDebugSource = (value) => typeof value === 'string' && value.length <= 12000
@@ -180,18 +183,21 @@ export function inspectorApi(env, historyDirectory = resolve('ai-history')) {
         return respond(200, { source: revised, debugSource: result.debugSource })
       }
 
-      if (typeof source !== 'string' || !source.trim() || source.length > 30000) {
+      if (typeof source !== 'string' || !source.trim() || source.length > 30000 || !validDebugSource(debugSource)) {
         return respond(400, { error: '실행 코드를 확인해 주세요.' })
       }
-      const { lines: sites } = instrument(source)
-      const codeLines = source.split(/\r\n|[\r\n\u2028\u2029]/)
-      const recordableLines = [...sites].sort((a, b) => a - b)
-        .map((line) => ({ line, code: codeLines[line - 1].trim() }))
-      const plan = await requestModel('analyze', { concern: body.concern, source, recordableLines })
-      const lines = [...new Map(plan.lines.filter(({ line }) => sites.has(line))
-        .map((item) => [item.line, item])).values()].slice(0, 12)
+      const recordableFunctions = instrument(source).functions.filter(isDebugCandidate)
+      const sites = new Set(recordableFunctions.map(({ functionId }) => functionId))
+      const plan = await requestModel('analyze', { concern: body.concern, source, debugSource, recordableFunctions })
+      if (!Number.isInteger(plan.cycleCount) || plan.cycleCount < 1 || plan.cycleCount > MAX_CYCLES
+        || typeof plan.cycleReason !== 'string' || !plan.cycleReason.trim()) {
+        return respond(502, { error: 'AI 응답에서 볼 사이클 수를 확인할 수 없어요.' })
+      }
+      const functions = [...new Map(plan.functions.filter(({ functionId }) => sites.has(functionId))
+        .map((item) => [item.functionId, item])).values()].slice(0, 12)
       const historyRef = { id: history.id, startedAt: history.startedAt }
-      return respond(200, { summary: plan.summary, lines, source: 'ai', historyRef })
+      return respond(200, { summary: plan.summary, cycleCount: plan.cycleCount, cycleReason: plan.cycleReason,
+        functions, source: 'ai', historyRef })
     } catch (error) {
       failure = { name: error.name, message: error.message }
       if (controller.signal.aborted) return

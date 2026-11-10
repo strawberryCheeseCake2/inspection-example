@@ -17,16 +17,22 @@ function paint(x, y) {
   s.waterNeighbors = countWater(s.grid, col, row)
 }
 
-p.setup = () => {
-  p.createCanvas(720, 390)
-  p.frameRate(12)
-  const grid = Array.from({ length: ROWS }, () => Array(COLS).fill(EMPTY))
+function createGrid() {
+  const grid = []
+  for (let y = 0; y < ROWS; y++) grid.push(Array(COLS).fill(EMPTY))
   for (let x = 0; x < COLS; x++) {
     for (let y = 22 + Math.round(2 * Math.sin(x / 5)); y < ROWS; y++) grid[y][x] = SOIL
   }
   for (let x = 13; x < 24; x++) grid[8 + x % 3][x] = WATER
   for (let x = 30; x < 37; x++) grid[7 + x % 3][x] = SAND
   grid[18][17] = SEED
+  return grid
+}
+
+p.setup = () => {
+  p.createCanvas(720, 390)
+  p.frameRate(12)
+  const grid = createGrid()
   state = {
     grid, cell: { x: 17, y: 18 }, brush: WATER, isTree: false,
     waterNeighbors: 0, floodThreshold: 2, flooding: false, observed: {},
@@ -40,8 +46,17 @@ p.keyPressed = () => {
 }
 
 function countWater(grid, x, y) {
-  return [[-1, 0], [1, 0], [0, -1], [0, 1]]
-    .filter(([dx, dy]) => grid[y + dy]?.[x + dx] === WATER).length
+  let count = 0
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+    if (grid[y + dy]?.[x + dx] === WATER) count++
+  }
+  return count
+}
+
+function floodTree(s, x, y, key) {
+  s.grid[y][x] = FLOODED
+  s.isTree = false
+  delete s.observed[key]
 }
 
 function inspectTree(s, x, y) {
@@ -53,11 +68,38 @@ function inspectTree(s, x, y) {
   s.cell = { x, y }
   s.isTree = s.grid[y][x] === TREE
   s.waterNeighbors = count
-  if (flood) {
-    s.grid[y][x] = FLOODED
-    s.isTree = false
-    delete s.observed[key]
+  if (flood) floodTree(s, x, y, key)
+}
+
+function findOpenNeighbor(grid, x, y, value) {
+  const options = value === SEED ? [[0, 1]] : [[0, 1], [-1, 1], [1, 1]]
+  let next
+  for (const offset of options) {
+    const [dx, dy] = offset
+    if (grid[y + dy]?.[x + dx] === EMPTY) {
+      next = offset
+      break
+    }
   }
+  return next
+}
+
+function growTree(s, x, y) {
+  const { grid } = s
+  grid[y][x] = TREE
+  if (grid[y - 1]?.[x] === EMPTY) grid[y - 1][x] = TREE
+  s.cell = { x, y }
+  s.isTree = true
+  s.waterNeighbors = countWater(grid, x, y)
+}
+
+function updateParticle(s, x, y, value) {
+  const { grid } = s
+  const next = findOpenNeighbor(grid, x, y, value)
+  if (next) {
+    grid[y + next[1]][x + next[0]] = value
+    grid[y][x] = EMPTY
+  } else if (value === SEED) growTree(s, x, y)
 }
 
 function updateGrid() {
@@ -71,19 +113,7 @@ function updateGrid() {
   for (let y = ROWS - 2; y >= 0; y--) {
     for (let x = 0; x < COLS; x++) {
       const value = grid[y][x]
-      if (![WATER, SAND, SEED].includes(value)) continue
-      const options = value === SEED ? [[0, 1]] : [[0, 1], [-1, 1], [1, 1]]
-      const next = options.find(([dx, dy]) => grid[y + dy]?.[x + dx] === EMPTY)
-      if (next) {
-        grid[y + next[1]][x + next[0]] = value
-        grid[y][x] = EMPTY
-      } else if (value === SEED) {
-        grid[y][x] = TREE
-        if (grid[y - 1]?.[x] === EMPTY) grid[y - 1][x] = TREE
-        s.cell = { x, y }
-        s.isTree = true
-        s.waterNeighbors = countWater(grid, x, y)
-      }
+      if ([WATER, SAND, SEED].includes(value)) updateParticle(s, x, y, value)
     }
   }
 }

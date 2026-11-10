@@ -4,14 +4,25 @@ const colors = ['#f39cbd', '#f9b7ce', '#e887b2', '#e9a5d5', '#f5acc5']
 let lastPoint
 
 function overlap(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y) < (a.size + b.size) * 0.68
+  const distance = Math.hypot(a.x - b.x, a.y - b.y)
+  const overlapRadius = (a.size + b.size) * 0.68
+  const isOverlapping = distance < overlapRadius
+  return isOverlapping
+}
+
+function findOverlaps(heart, hearts, ignoredIndex = -1) {
+  const overlaps = []
+  for (let i = 0; i < hearts.length; i++) {
+    if (i !== ignoredIndex && overlap(heart, hearts[i])) overlaps.push(i)
+  }
+  return overlaps
 }
 
 function stamp(x, y, size) {
   const s = state
   s.cursor = { x, y }
   const heart = { x, y, size, color: s.hearts.length % colors.length }
-  s.overlaps = s.hearts.flatMap((other, i) => overlap(heart, other) ? [i] : [])
+  s.overlaps = findOverlaps(heart, s.hearts)
   s.active = s.hearts.push(heart) - 1
 }
 
@@ -21,39 +32,64 @@ p.setup = () => {
   state = { hearts: [], cursor: { x: 0, y: 0 }, active: -1, overlaps: [], merge: false }
 }
 
-function addPointerHeart() {
-  lastPoint = { x: p.mouseX, y: p.mouseY }
-  stamp(lastPoint.x, lastPoint.y, 57)
+function samplePointer() {
+  const x = p.mouseX
+  const y = p.mouseY
+  return { x, y }
+}
+
+function addPointerHeart(point) {
+  lastPoint = point
+  const size = 57
+  stamp(point.x, point.y, size)
+}
+
+function shouldStamp(point) {
+  const insideCanvas = point.x >= 0 && point.x <= p.width && point.y >= 0 && point.y <= p.height
+  const spacing = 25
+  const distance = lastPoint ? Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y) : Infinity
+  const ready = insideCanvas && distance >= spacing
+  return ready
 }
 
 p.mousePressed = () => {
-  addPointerHeart()
+  addPointerHeart(samplePointer())
 }
 
 p.mouseDragged = () => {
-  if (p.mouseX < 0 || p.mouseX > p.width || p.mouseY < 0 || p.mouseY > p.height) return
-  if (!lastPoint || Math.hypot(p.mouseX - lastPoint.x, p.mouseY - lastPoint.y) >= 25) {
-    addPointerHeart()
+  const point = samplePointer()
+  if (shouldStamp(point)) addPointerHeart(point)
+}
+
+function collectCluster(pending) {
+  const cluster = [pending.pop()]
+  for (const heart of cluster) {
+    for (let i = pending.length - 1; i >= 0; i--) {
+      if (overlap(heart, pending[i])) cluster.push(...pending.splice(i, 1))
+    }
   }
+  return cluster
+}
+
+function combineCluster(cluster) {
+  let totalX = 0
+  let totalY = 0
+  const sizes = []
+  for (const heart of cluster) {
+    totalX += heart.x
+    totalY += heart.y
+    sizes.push(heart.size)
+  }
+  const x = totalX / cluster.length
+  const y = totalY / cluster.length
+  const size = Math.hypot(...sizes)
+  return { x, y, size, color: cluster[0].color }
 }
 
 function mergeClusters(hearts) {
   const pending = [...hearts]
   const result = []
-  while (pending.length) {
-    const cluster = [pending.pop()]
-    for (const heart of cluster) {
-      for (let i = pending.length - 1; i >= 0; i--) {
-        if (overlap(heart, pending[i])) cluster.push(...pending.splice(i, 1))
-      }
-    }
-    result.push({
-      x: cluster.reduce((sum, h) => sum + h.x, 0) / cluster.length,
-      y: cluster.reduce((sum, h) => sum + h.y, 0) / cluster.length,
-      size: Math.hypot(...cluster.map((h) => h.size)),
-      color: cluster[0].color,
-    })
-  }
+  while (pending.length) result.push(combineCluster(collectCluster(pending)))
   return result
 }
 
@@ -72,23 +108,26 @@ function drawHeart({ x, y, size, color }) {
   p.pop()
 }
 
-p.draw = () => {
-  const s = state
+function drawPaper() {
   p.background('#f5edf5')
   p.stroke('#ded2e2')
   p.strokeWeight(2)
   for (let y = 15; y < p.height; y += 15) {
     for (let x = 15; x < p.width; x += 15) p.point(x, y)
   }
+}
+
+function drawTrajectory(hearts, cursor) {
   p.noFill()
   p.stroke('#a875ac')
   p.drawingContext.setLineDash([4, 6])
   p.beginShape()
-  for (const { x, y } of [...s.hearts, s.cursor]) p.vertex(x, y)
+  for (const { x, y } of [...hearts, cursor]) p.vertex(x, y)
   p.endShape()
   p.drawingContext.setLineDash([])
-  for (const heart of s.merge ? mergeClusters(s.hearts) : s.hearts) drawHeart(heart)
-  const active = s.hearts[s.active]
+}
+
+function drawSelection(active) {
   if (!active) return
   p.noFill()
   p.stroke('#754681')
@@ -98,4 +137,13 @@ p.draw = () => {
   p.drawingContext.setLineDash([])
   p.line(active.x - 4, active.y, active.x + 4, active.y)
   p.line(active.x, active.y - 4, active.x, active.y + 4)
+}
+
+p.draw = () => {
+  const { hearts, cursor, merge, active } = state
+  drawPaper()
+  drawTrajectory(hearts, cursor)
+  const visibleHearts = merge ? mergeClusters(hearts) : hearts
+  for (const heart of visibleHearts) drawHeart(heart)
+  drawSelection(hearts[active])
 }

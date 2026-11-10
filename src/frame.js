@@ -1,12 +1,13 @@
 import p5Url from 'p5/lib/p5.min.js?url&no-inline'
 import { instrument } from './instrument.js'
-import { createRecorder } from './recorder.js'
+import { createRecorder, HISTORY_LIMIT } from './recorder.js'
+import { createCanvasTrace, MAX_DRAWING_COMMANDS, MAX_DRAWING_WINDOWS } from './canvasTrace.js'
 
 export const WIDTH = 720
 export const HEIGHT = 390
 
 // Serialized into an opaque-origin iframe. Keep this function self-contained.
-function boot(source, hook, anchors, width, height, createRecorder, restored) {
+function boot(source, hook, functions, historyLimit, width, height, createRecorder, createCanvasTrace, drawingLimit, windowLimit, restored) {
   const send = (message) => parent.postMessage(message, '*')
   const copy = (value) => JSON.parse(JSON.stringify(value))
   let event = 'setup'
@@ -15,6 +16,7 @@ function boot(source, hook, anchors, width, height, createRecorder, restored) {
   let fallbackState = {}
   let readState
   let writeState
+  let drawing
   const trace = {
     get state() { return readState?.() ?? fallbackState },
     set state(value) {
@@ -25,13 +27,9 @@ function boot(source, hook, anchors, width, height, createRecorder, restored) {
       readState = read
       writeState = write
     },
-    label(anchor, label) {
-      const site = anchors[anchor.replace(/;$/, '').trim()]
-      if (Number.isInteger(site)) recorder.label(site, label)
-    },
-    step(label) {
-      if (!preview) recorder.capture(String(label).slice(0, 100), null)
-    },
+    // Legacy sketches may still call the old line-checkpoint hooks.
+    label() {},
+    step() {},
     startCycle() {
       if (!preview) recorder.begin()
     },
@@ -39,15 +37,21 @@ function boot(source, hook, anchors, width, height, createRecorder, restored) {
       if (!preview) recorder.end()
     },
   }
-  const recorder = createRecorder(send, snapshot, trace, () => ({ event, preview }))
+  const recorder = createRecorder(send, snapshot, trace, () => ({
+    event, preview,
+    get canvasCursor() { return drawing?.cursor() },
+    readOnly: Boolean(drawing || trace.record),
+  }), functions, historyLimit)
 
   function snapshot() {
-    if (!trace.state || typeof trace.state !== 'object' || Array.isArray(trace.state)) {
-      throw new Error('trace.state는 JSON 객체여야 합니다.')
+    try {
+      const data = typeof trace.record === 'function' ? trace.record() : trace.state
+      const json = data && typeof data === 'object' && !Array.isArray(data) && JSON.stringify(data)
+      if (json && json.length <= 64000) return json
+    } catch {
+      // Optional trace data should not interrupt the sketch.
     }
-    const json = JSON.stringify(trace.state)
-    if (!json || json.length > 64000) throw new Error('trace.state must be JSON data under 64 KB.')
-    return json
+    return '{}'
   }
 
   new p5((p) => {
@@ -63,12 +67,12 @@ function boot(source, hook, anchors, width, height, createRecorder, restored) {
     }
 
     const cycle = trace.cycle ?? (trace.render && !draw ? undefined : 'frame')
+    if (!trace.render && !writeState) drawing = createCanvasTrace(p, drawingLimit, cycle === 'frame', windowLimit)
 
     function render() {
       if (!redraw || (preview && !trace.render && readState?.() === undefined)) return
       const liveState = trace.state
       if (preview) trace.state = copy(preview.state)
-      recorder.callback(true)
       p.push()
       try {
         redraw.call(trace.render ? trace : p)
@@ -78,14 +82,19 @@ function boot(source, hook, anchors, width, height, createRecorder, restored) {
       }
     }
 
+    function showPreview() {
+      if (!drawing) return render()
+      const saved = restored && preview.id <= restored.latest.id ? restored.drawings : undefined
+      drawing.show(preview.canvasCursor, saved)
+    }
+
     function run(name, handler) {
       event = name
-      recorder.callback()
       return handler()
     }
 
     function edit(label, mutate) {
-      if (!preview) return
+      if (!preview || drawing || trace.record) return
       const liveState = trace.state
       const before = JSON.stringify(preview.state)
       trace.state = preview.state
@@ -95,7 +104,7 @@ function boot(source, hook, anchors, width, height, createRecorder, restored) {
         preview.state = JSON.parse(json)
         if (json === before) return
         event = 'stateEdit'
-        recorder.capture(label, preview.line, null, preview.id, preview.cycle)
+        recorder.capture({ ...preview, label }, null, preview.id, preview.cycle)
         preview.id = recorder.sequence
       } finally {
         trace.state = liveState
@@ -116,17 +125,26 @@ function boot(source, hook, anchors, width, height, createRecorder, restored) {
       target[key] = value
     }
 
-    window.addEventListener('message', ({ source: sender, data }) => {
+    window.addEventListener('message', ({ source: sender, data, ports }) => {
       if (sender !== parent || !data) return
       if (data.type === 'inspect') {
-        const { id, cycle, line, state } = data.step
-        preview = { id, cycle, line, state: copy(state) }
-        render()
+        const { id, cycle, line, endLine, functionId, canvasCursor, state } = data.step
+        preview = { id, cycle, line, endLine, functionId, canvasCursor, state: copy(state) }
+        showPreview()
       }
       if (data.type === 'live') {
-        if (data.state) trace.state = copy(data.state)
         preview = null
-        if (trace.render || readState?.() !== undefined) render()
+        if (drawing) drawing.hide()
+        else {
+          if (data.state) trace.state = copy(data.state)
+          if (trace.render || readState?.() !== undefined) render()
+        }
+      }
+      if (data.type === 'exportDrawing' && ports[0]) {
+        const { cursors, id } = data
+        const saved = restored && id <= restored.latest.id ? restored.drawings : undefined
+        ports[0].postMessage(drawing?.export(cursors, saved))
+        ports[0].close()
       }
       if (data.type === 'edit') {
         const { path, value } = data
@@ -147,9 +165,10 @@ function boot(source, hook, anchors, width, height, createRecorder, restored) {
       }
       if (restored) {
         recorder.restore(restored.latest.cycle, restored.latest.id)
-        trace.state = copy(restored.latest.state)
+        if (!drawing) trace.state = copy(restored.latest.state)
       }
-      if (preview || !draw) render()
+      if (preview) showPreview()
+      else if (!draw) render()
       if (cycle === 'frame') recorder.end()
       send({ type: 'ready' })
     }
@@ -157,15 +176,13 @@ function boot(source, hook, anchors, width, height, createRecorder, restored) {
     p.draw = () => {
       if (preview) return
       const frameCycle = cycle === 'frame'
-      if (frameCycle && !recorder.active) recorder.begin()
+      if (frameCycle && !recorder.active) {
+        drawing?.nextFrame()
+        recorder.begin()
+      }
       event = 'draw'
-      if (draw) {
-        if (trace.render) run('draw', () => draw.call(p))
-        else {
-          recorder.callback(true)
-          draw.call(p)
-        }
-      } else {
+      if (draw) draw.call(p)
+      else {
         if (trace.tick) run('draw', trace.tick)
         render()
       }
@@ -214,5 +231,5 @@ export function frameDocument(source, debugSource = '', restored = null) {
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' ${library}; style-src 'unsafe-inline'; img-src data: blob:">
     <style>html,body{margin:0;overflow:hidden;background:#efede7}canvas{display:block;width:100%!important;height:auto!important;outline:none;touch-action:none}</style>
     <script src="${library}"></script>
-    </head><body><script>(${boot.toString()})(${code},${JSON.stringify(compiled.hook)},${scriptData(compiled.anchors)},${WIDTH},${HEIGHT},${createRecorder.toString()},${scriptData(restored)})</script></body></html>`
+    </head><body><script>(${boot.toString()})(${code},${JSON.stringify(compiled.hook)},${scriptData(compiled.functions)},${HISTORY_LIMIT},${WIDTH},${HEIGHT},${createRecorder.toString()},${createCanvasTrace.toString()},${MAX_DRAWING_COMMANDS},${MAX_DRAWING_WINDOWS},${scriptData(restored)})</script></body></html>`
 }

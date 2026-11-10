@@ -5,6 +5,12 @@ Create a complete editable p5.js instance-mode sketch for the user's description
 Return source and debugSource, with no markdown. Keep the sketch focused and the attachment small.
 Do not import anything, instantiate p5, or use network APIs.
 
+Keep p5 callbacks small and compose them from named helpers with a single responsibility.
+Split substantial work into inspectable operations such as sampling input, deciding whether to
+act, updating state, and drawing. Give meaningful array callbacks names when they represent
+their own operation. Group related statements into the same function when they form one action.
+Use named local variables for important outputs so they are visible when a helper exits.
+
 In source, make useful runtime values visible to the debugger by declaring them as named
 variables wherever their values help explain the sketch's behavior. Apply this throughout
 the sketch, independently of the initial request. Prefer named bindings for:

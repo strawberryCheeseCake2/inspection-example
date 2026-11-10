@@ -54,19 +54,25 @@ export function RuntimeState({ step, report, live, onEdit }) {
   })
   const variables = Object.entries(step?.variables ?? {})
   const state = Object.entries(step?.state ?? {})
+  const disabled = live || step?.readOnly
   return <section className="panel state-panel" aria-label="런타임 상태">
     <div className="panel-header">
       <div className="panel-title"><Icon name="sliders" /><h2>런타임 상태</h2></div>
       <span className="panel-meta">{focused ? '요청 관련 변수' : '전체 변수'}</span>
     </div>
-    {report && <p className="analysis-note"><span>{report.source === 'ai' ? 'AI 분석' : '로컬 분석'}</span>{annotation?.note || report.summary}</p>}
+    {report && <p className="analysis-note">
+      <span>{report.source === 'ai' ? 'AI 분석' : '로컬 분석'}</span>{annotation?.note || report.summary}
+      {report.cycleReason && <><br /><strong>{report.cycleCount}사이클 선택</strong>
+        {report.cycles.length < report.cycleCount && ` · 최근 ${report.cycles.length}사이클 기록 확보`}
+        {' · '}{report.cycleReason}</>}
+    </p>}
     {focused && step && (fields.length ? <div className="variables" key={step.id}>
       {fields.map(({ path, value }) => <div className="variable" key={path}>
         <code title={path}>{displayPath(path)}</code>
         {path.startsWith('@')
           ? <output className="value read-only" title={value}>{value}</output>
           : <StateValue path={Object.hasOwn(step.state, path) ? [path] : path.split('.')}
-            value={value} live={live} onEdit={onEdit} />}
+            value={value} live={disabled} onEdit={onEdit} />}
       </div>)}
     </div> : <p className="empty">이 스텝에서 AI가 선택한 변수가 없어요.</p>)}
     {!report && !variables.length && !state.length && <p className="empty">기록된 변수가 여기에 표시됩니다.</p>}
@@ -77,9 +83,9 @@ export function RuntimeState({ step, report, live, onEdit }) {
       </div>)}</dl>
     </div>}
     {!focused && !!state.length && <div className="bindings">
-      <strong>스케치 상태 {live ? '(일시정지 후 편집)' : '(편집 가능)'}</strong>
+      <strong>스케치 상태 {step.readOnly ? '(읽기 전용)' : live ? '(일시정지 후 편집)' : '(편집 가능)'}</strong>
       <dl>{state.map(([name, value]) => <div key={name}>
-        <dt>{name}</dt><dd><StateValue path={[name]} value={value} live={live} onEdit={onEdit} /></dd>
+        <dt>{name}</dt><dd><StateValue path={[name]} value={value} live={disabled} onEdit={onEdit} /></dd>
       </div>)}</dl>
     </div>}
   </section>

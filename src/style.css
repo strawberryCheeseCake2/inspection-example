@@ -76,7 +76,7 @@ select { color: var(--ink); font-size: 13px; font-weight: 600; background: var(-
 .source, .source-highlight { left: 44px; width: calc(100% - 44px); padding-inline: 10px; tab-size: 2; white-space: pre; }
 .source-highlight { margin: 0; overflow: hidden; pointer-events: none; }
 .source-highlight code { display: block; position: relative; font: inherit; transform: translate(var(--editor-scroll-x, 0px), var(--editor-scroll-y, 0px)); }
-.source-line-marker { position: absolute; inset-inline: 0; top: calc(12px + var(--line-index) * var(--editor-line-height) + var(--editor-scroll-y, 0px)); height: var(--editor-line-height); background: #344936; }
+.source-line-marker { position: absolute; inset-inline: 0; top: calc(12px + var(--line-index) * var(--editor-line-height) + var(--editor-scroll-y, 0px)); height: calc(var(--line-count) * var(--editor-line-height)); background: #344936; }
 .source-highlight .token.comment { color: #a7b6a7; }
 .source-highlight .token.keyword { color: #d8b8ef; }
 .source-highlight .token.string, .source-highlight .token.regex { color: #cde69d; }

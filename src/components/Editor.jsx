@@ -2,7 +2,7 @@ import React, { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import Prism from 'prismjs'
 import { Icon } from './Icon.jsx'
 
-export function Editor({ source, debugSource, setSource, file, line, dirty, run }) {
+export function Editor({ source, debugSource, setSource, file, line, endLine, dirty, run }) {
   const input = useRef(null)
   const body = useRef(null)
   const [composing, setComposing] = useState(false)
@@ -10,6 +10,7 @@ export function Editor({ source, debugSource, setSource, file, line, dirty, run 
   const visibleSource = showDebug ? debugSource || '// 별도 추적 코드 없음' : source
   const lines = visibleSource.split('\n').length
   const activeLine = !showDebug && !dirty && line > 0 && line <= lines ? line : null
+  const activeEnd = activeLine && Math.min(lines, endLine ?? activeLine)
   const highlighted = useMemo(() => Prism.highlight(visibleSource, Prism.languages.javascript, 'javascript'), [visibleSource])
 
   function syncScroll() {
@@ -44,16 +45,19 @@ export function Editor({ source, debugSource, setSource, file, line, dirty, run 
     </div>
     <div className="editor-tab"><span className="js-mark">JS</span><span>{showDebug ? file.replace(/\.js$/, '.trace.js') : file}</span>
       {dirty && <span className="dirty-mark" title="실행 대기 중인 변경사항" />}
-      <span className="editor-line">{showDebug ? '읽기 전용' : activeLine ? `LINE ${activeLine}` : 'p5.js'}</span>
+      <span className="editor-line">{showDebug ? '읽기 전용' : activeLine
+        ? activeEnd > activeLine ? `LINES ${activeLine}–${activeEnd}` : `LINE ${activeLine}` : 'p5.js'}</span>
     </div>
     <div ref={body} className={composing ? 'editor-body is-composing' : 'editor-body'}>
       <div className="gutter" aria-hidden="true">
         <div className="gutter-lines">
-          {Array.from({ length: lines }, (_, i) => <div key={i} className={i + 1 === activeLine ? 'current-line' : ''}>{i + 1}</div>)}
+          {Array.from({ length: lines }, (_, i) => <div key={i}
+            className={activeLine && i + 1 >= activeLine && i + 1 <= activeEnd ? 'current-line' : ''}>{i + 1}</div>)}
         </div>
       </div>
       <pre className="source-highlight" aria-hidden="true">
-        {activeLine && <span className="source-line-marker" style={{ '--line-index': activeLine - 1 }} />}
+        {activeLine && <span className="source-line-marker"
+          style={{ '--line-index': activeLine - 1, '--line-count': activeEnd - activeLine + 1 }} />}
         <code dangerouslySetInnerHTML={{ __html: highlighted }} />
       </pre>
       <textarea key={showDebug ? 'trace' : 'sketch'} ref={input} className="source"

@@ -3,6 +3,7 @@ import { Icon } from './Icon.jsx'
 
 export function Preview({ frame, run, ready, live, step, steps, report, seek, toggleLive, showAll, onReset }) {
   const index = steps.findIndex(({ id }) => id === step?.id)
+  const cycle = report?.cycles.indexOf(step?.cycle) ?? -1
 
   return <section className="panel preview-panel" aria-label="스케치 및 실행 스텝">
     <div className="panel-header">
@@ -21,9 +22,10 @@ export function Preview({ frame, run, ready, live, step, steps, report, seek, to
       <div className="timeline-top">
         <div className="step-label">
           <span className="step-number">{step ? `#${String(step.id).padStart(3, '0')}` : '#–––'}</span>
-          <strong title={step?.label}>{step?.label ?? (report ? '선택한 줄의 실행 기록 없음' : '실행 기록 대기 중')}</strong>
+          <strong title={step?.label}>{step?.label ?? (report ? '관련 실행 기록 없음' : '실행 기록 대기 중')}</strong>
         </div>
         <span className="trace-count" aria-live="polite">
+          {cycle >= 0 && report.cycles.length > 1 && `사이클 ${cycle + 1}/${report.cycles.length} · `}
           {`${steps.length} STEPS`}{report && <> <button type="button" onClick={showAll}>전체 기록</button></>}
         </span>
       </div>
