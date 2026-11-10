@@ -1,13 +1,13 @@
 import p5Url from 'p5/lib/p5.min.js?url&no-inline'
 import { instrument } from './instrument.js'
 import { createRecorder, HISTORY_LIMIT } from './recorder.js'
-import { createCanvasTrace, MAX_DRAWING_COMMANDS, MAX_DRAWING_WINDOWS } from './canvasTrace.js'
+import { createCanvasTrace, MAX_DRAWING_COMMANDS, MAX_DRAWING_WINDOWS, MAX_DRAWING_BYTES } from './canvasTrace.js'
 
 export const WIDTH = 720
 export const HEIGHT = 390
 
 // Serialized into an opaque-origin iframe. Keep this function self-contained.
-function boot(source, hook, functions, historyLimit, width, height, createRecorder, createCanvasTrace, drawingLimit, windowLimit, restored) {
+function boot(source, hook, functions, historyLimit, width, height, createRecorder, createCanvasTrace, drawingLimit, windowLimit, drawingBytes, restored) {
   const send = (message) => parent.postMessage(message, '*')
   const copy = (value) => JSON.parse(JSON.stringify(value))
   let event = 'setup'
@@ -68,7 +68,7 @@ function boot(source, hook, functions, historyLimit, width, height, createRecord
     }
 
     const cycle = trace.cycle ?? (trace.render && !draw ? undefined : 'frame')
-    if (!trace.render && !writeState) drawing = createCanvasTrace(p, drawingLimit, cycle === 'frame', windowLimit)
+    if (!trace.render && !writeState) drawing = createCanvasTrace(p, drawingLimit, cycle === 'frame', windowLimit, drawingBytes)
 
     function render() {
       if (!redraw || (preview && !trace.render && readState?.() === undefined)) return
@@ -100,10 +100,14 @@ function boot(source, hook, functions, historyLimit, width, height, createRecord
     }
     window.addEventListener('resize', publishGeometry)
 
-    function showPreview() {
+    async function showPreview() {
       if (drawing) {
-        const saved = restored && preview.id <= restored.latest.id ? restored.drawings : undefined
-        previewCanvas = drawing.show(preview.canvasCursor, saved)
+        const step = preview
+        const saved = restored && step.id <= restored.latest.id ? restored.drawings : undefined
+        previewCanvas = null
+        const canvas = await drawing.show(step.canvasCursor, saved)
+        if (preview !== step) return
+        previewCanvas = canvas
       } else {
         render()
         previewCanvas = p.canvas
@@ -208,5 +212,5 @@ export function frameDocument(source, debugSource = '', restored = null) {
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' ${library}; style-src 'unsafe-inline'; img-src data: blob:">
     <style>html,body{margin:0;overflow:hidden;background:#efede7}canvas{display:block;width:100%!important;height:auto!important;outline:none;touch-action:none}</style>
     <script src="${library}"></script>
-    </head><body><script>(${boot.toString()})(${code},${JSON.stringify(compiled.hook)},${scriptData(compiled.functions)},${HISTORY_LIMIT},${WIDTH},${HEIGHT},${createRecorder.toString()},${createCanvasTrace.toString()},${MAX_DRAWING_COMMANDS},${MAX_DRAWING_WINDOWS},${scriptData(restored)})</script></body></html>`
+    </head><body><script>(${boot.toString()})(${code},${JSON.stringify(compiled.hook)},${scriptData(compiled.functions)},${HISTORY_LIMIT},${WIDTH},${HEIGHT},${createRecorder.toString()},${createCanvasTrace.toString()},${MAX_DRAWING_COMMANDS},${MAX_DRAWING_WINDOWS},${MAX_DRAWING_BYTES},${scriptData(restored)})</script></body></html>`
 }

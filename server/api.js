@@ -35,7 +35,9 @@ const analysis = object({
 })
 
 const overlay = object({
-  plans: { type: 'array', items: object({ site: { type: 'integer' }, code: string, skipReason: string }) },
+  plans: { type: 'array', items: object({
+    site: { type: 'integer' }, code: string, skipReason: string, accumulate: { type: 'boolean' },
+  }) },
 })
 
 const tasks = {

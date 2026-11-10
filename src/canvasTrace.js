@@ -1,8 +1,9 @@
 export const MAX_DRAWING_COMMANDS = 100000
 export const MAX_DRAWING_WINDOWS = 8
+export const MAX_DRAWING_BYTES = 4_000_000
 
-// Serialized into the sketch iframe. Only Canvas 2D commands with plain data are recorded.
-export function createCanvasTrace(p, limit, rolling, windowLimit) {
+// Serialized into the sketch iframe.
+export function createCanvasTrace(p, limit, rolling, windowLimit, byteLimit) {
   const methods = ('save restore reset scale rotate translate transform setTransform resetTransform ' +
     'clearRect fillRect strokeRect beginPath closePath moveTo lineTo bezierCurveTo quadraticCurveTo ' +
     'arc arcTo ellipse rect roundRect fill stroke clip fillText strokeText setLineDash').split(' ')
@@ -10,7 +11,6 @@ export function createCanvasTrace(p, limit, rolling, windowLimit) {
     'globalAlpha globalCompositeOperation imageSmoothingEnabled imageSmoothingQuality letterSpacing ' +
     'lineCap lineDashOffset lineJoin lineWidth miterLimit shadowBlur shadowColor shadowOffsetX ' +
     'shadowOffsetY strokeStyle textAlign textBaseline textRendering wordSpacing').split(' ')
-  const byteLimit = 4_000_000
   let journal = { commands: [], offset: 0, first: 0, bytes: 0 }
   const archived = []
   let checkpoint
@@ -23,6 +23,8 @@ export function createCanvasTrace(p, limit, rolling, windowLimit) {
   let context
   let size
   let overlay
+  let displayId = 0
+  let image
 
   function record(command) {
     if (!available) return
@@ -100,6 +102,11 @@ export function createCanvasTrace(p, limit, rolling, windowLimit) {
     })
   }
 
+  function checkpointPrefix(pixels) {
+    return [['size', ...size], ...pixels, ...contextProperties(), ['setLineDash', context.getLineDash()],
+      ...path, transform()]
+  }
+
   if (rolling) {
     const original = p.background
     p.background = function (...args) {
@@ -109,10 +116,9 @@ export function createCanvasTrace(p, limit, rolling, windowLimit) {
         const result = original.apply(this, args)
         if (available && overwrite.color && !depth && !clipped && path) {
           // Opaque background covers every pixel. Keep enough commands to rebuild the context too.
-          const prefix = [
-            ['size', ...size], ['set', 'fillStyle', overwrite.color], ['fillRect', 0, 0, ...size],
-            ...contextProperties(), ['setLineDash', context.getLineDash()], ...path, transform(),
-          ]
+          const prefix = checkpointPrefix([
+            ['set', 'fillStyle', overwrite.color], ['fillRect', 0, 0, ...size],
+          ])
           checkpoint = { cursor: journal.offset + journal.commands.length, prefix }
         }
         return result
@@ -123,10 +129,17 @@ export function createCanvasTrace(p, limit, rolling, windowLimit) {
   }
 
   function nextFrame() {
-    if (!available || !checkpoint || (journal.commands.length < limit / 2 && journal.bytes < byteLimit / 2)) return
-    const { cursor, prefix } = checkpoint
-    const commands = prefix.concat(journal.commands.slice(cursor - journal.offset))
-    if (commands.length >= journal.commands.length) return
+    if (!available || (journal.commands.length < limit / 2 && journal.bytes < byteLimit / 2)) return
+    let { cursor, prefix } = checkpoint ?? {}
+    let commands = prefix?.concat(journal.commands.slice(cursor - journal.offset))
+    if (!commands || commands.length >= journal.commands.length) {
+      if (!context || depth || clipped || !path) return
+      // A translucent frame still depends on earlier pixels. Save a shared base for the next command window.
+      const png = context.canvas.toDataURL()
+      if (!png.startsWith('data:image/png;base64,') || png.length > byteLimit / 2) return
+      cursor = journal.offset + journal.commands.length
+      commands = prefix = checkpointPrefix([['pixels', png]])
+    }
     archived.unshift(journal)
     if (archived.length >= windowLimit) archived.pop()
     journal = { commands, offset: cursor - prefix.length, first: cursor,
@@ -210,11 +223,13 @@ export function createCanvasTrace(p, limit, rolling, windowLimit) {
   }
 
   function hide() {
+    displayId++
     overlay?.remove()
     overlay = undefined
   }
 
-  function show(cursor, saved) {
+  async function show(cursor, saved) {
+    const id = ++displayId
     const live = p.canvas
     if (!live?.parentNode) return
     if (!overlay) {
@@ -227,21 +242,44 @@ export function createCanvasTrace(p, limit, rolling, windowLimit) {
     const { top, left } = live.getBoundingClientRect()
     overlay.style.top = `${top}px`
     overlay.style.left = `${left}px`
-    const replay = overlay.getContext('2d')
-    overlay.width = live.width
-    overlay.height = live.height
     const recording = Number.isSafeInteger(cursor) && windowFor(cursor, saved)
-    if (!recording) {
+    function unavailable() {
+      overlay.width = live.width
+      overlay.height = live.height
+      const replay = overlay.getContext('2d')
       replay.fillStyle = '#504d44'
       replay.font = '16px sans-serif'
       replay.fillText('이 스텝의 캔버스 기록을 재생할 수 없어요.', 16, 30)
-      return
     }
+    if (!recording) return unavailable()
+    let base
+    if (recording.commands[1]?.[0] === 'pixels') {
+      const [, png] = recording.commands[1]
+      if (image?.src !== png) {
+        image = new Image()
+        image.src = png
+      }
+      base = image
+      try {
+        await base.decode()
+      } catch {
+        if (id === displayId) unavailable()
+        return
+      }
+      if (id !== displayId) return
+      const [, width, height] = recording.commands[0]
+      if (base.naturalWidth !== width || base.naturalHeight !== height) return unavailable()
+    }
+    const replay = overlay.getContext('2d')
+    overlay.width = live.width
+    overlay.height = live.height
     for (let index = 0; index < cursor - recording.offset; index++) {
       const [name, ...args] = recording.commands[index]
       if (name === 'size') {
         overlay.width = args[0]
         overlay.height = args[1]
+      } else if (name === 'pixels' && index === 1) {
+        replay.drawImage(base, 0, 0)
       } else if (name === 'set' && properties.includes(args[0])) {
         replay[args[0]] = args[1]
       } else if (methods.includes(name)) {

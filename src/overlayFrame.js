@@ -1,53 +1,86 @@
 // These functions run in an opaque-origin iframe and its dedicated worker.
-import { readOverlayValue } from './overlay.js'
+import { overlayGuide, readOverlayValue } from './overlay.js'
 
-function workerMain(readValue) {
+function workerMain(readValue, validateGuide) {
   self.Worker = undefined
   self.SharedWorker = undefined
   self.postMessage = undefined
   const compile = Function
+  function drawStep(draw, input) {
+    const { width, height, step: { id: stepId } } = input
+    const snapshots = new Map(structuredClone([input.step, ...input.context]).map((step) => [step.id, step]))
+    const marks = []
+    let attempts = 0
+
+    function mark(locate, fields, guides) {
+      if (++attempts > 100 || marks.length >= 8 || typeof locate !== 'function'
+        || !Array.isArray(fields) || !fields.length) return false
+
+      const references = []
+      const fieldIndices = new Map()
+      for (const [index, field] of fields.slice(0, 6).entries()) {
+        if (!Array.isArray(field)) continue
+        const [scope, path, sourceId = stepId] = field
+        if (readValue(snapshots.get(sourceId), scope, path) === undefined) continue
+        fieldIndices.set(index, references.length)
+        references.push([scope, [...path], sourceId])
+      }
+      if (!references.length) return false
+
+      let usedTrace = false
+      const read = (scope, path, sourceId = stepId) => {
+        const value = readValue(snapshots.get(sourceId), scope, path)
+        if (value == null || (typeof value === 'string' && /^\[(?:…|Reference|Accessor|Unavailable)\]$/.test(value))) return
+        usedTrace = true
+        return typeof value === 'object' ? structuredClone(value) : value
+      }
+      const point = locate(read)
+      if (!usedTrace || !Array.isArray(point)) return false
+      const [x, y] = point
+      if (![x, y].every(Number.isFinite) || x < 0 || x > width || y < 0 || y > height) return false
+      const geometry = []
+      for (const guide of Array.isArray(guides) ? guides.slice(0, 4) : []) {
+        if (!Array.isArray(guide)) continue
+        const [index, measure] = guide
+        const field = fieldIndices.get(index)
+        if (field === undefined || typeof measure !== 'function') continue
+        try {
+          const value = read(...references[field])
+          if (value === undefined) continue
+          const measured = measure(value, read)
+          const remaining = 16 - geometry.length
+          for (const item of Array.isArray(measured) ? measured.slice(0, remaining) : [measured]) {
+            const result = validateGuide(item, width, height)
+            if (result) geometry.push({ ...result, field })
+            if (geometry.length === 16) break
+          }
+          if (geometry.length === 16) break
+        } catch {
+          // A guide may be unavailable on this occurrence. Keep the variable labels.
+        }
+      }
+      marks.push({ x, y, fields: references, guides: geometry })
+      return true
+    }
+
+    // Each occurrence gets its own copy of the selected snapshot.
+    const result = draw({ ...input, selected: structuredClone(input.selected) }, mark)
+    return result === false ? [] : marks
+  }
+
   self.onmessage = ({ ports: [port] }) => {
     self.onmessage = null
     const send = port.postMessage.bind(port)
-    port.onmessage = ({ data: { id, code, input } }) => {
+    const error = '오버레이 코드를 실행할 수 없어요.'
+    port.onmessage = ({ data: { id, code, inputs } }) => {
       try {
-        const { width, height, step: { id: stepId } } = input
-        const snapshots = new Map(structuredClone([input.step, ...input.context]).map((step) => [step.id, step]))
-        const marks = []
-        let attempts = 0
-
-        function mark(locate, fields) {
-          if (++attempts > 100 || marks.length >= 8 || typeof locate !== 'function'
-            || !Array.isArray(fields) || !fields.length) return false
-
-          const references = []
-          for (const field of fields.slice(0, 6)) {
-            if (!Array.isArray(field)) continue
-            const [scope, path, sourceId = stepId] = field
-            if (readValue(snapshots.get(sourceId), scope, path) === undefined) continue
-            references.push([scope, [...path], sourceId])
-          }
-          if (!references.length) return false
-
-          let usedTrace = false
-          const point = locate((scope, path, sourceId = stepId) => {
-            const value = readValue(snapshots.get(sourceId), scope, path)
-            if (value == null || (typeof value === 'string' && /^\[(?:…|Reference|Accessor|Unavailable)\]$/.test(value))) return
-            usedTrace = true
-            return typeof value === 'object' ? structuredClone(value) : value
-          })
-          if (!usedTrace || !Array.isArray(point)) return false
-          const [x, y] = point
-          if (![x, y].every(Number.isFinite) || x < 0 || x > width || y < 0 || y > height) return false
-          marks.push({ x, y, fields: references })
-          return true
-        }
-
         const draw = new compile('input', 'mark', '"use strict";\n' + code)
-        const result = draw(input, mark)
-        send({ id, marks: result === false ? [] : marks })
+        const results = inputs.map((input) => {
+          try { return { marks: drawStep(draw, input) } } catch { return { error } }
+        })
+        send({ id, results })
       } catch {
-        send({ id, error: '오버레이 코드를 실행할 수 없어요.' })
+        send({ id, error })
       }
     }
   }
@@ -117,7 +150,7 @@ function frameMain(workerSource) {
   })
 }
 
-const workerSource = '(' + workerMain.toString() + ')(' + readOverlayValue.toString() + ')'
+const workerSource = '(' + workerMain.toString() + ')(' + readOverlayValue.toString() + ',' + overlayGuide.toString() + ')'
 export const overlayDocument = `<!doctype html><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; worker-src blob:">
 <script>(${frameMain.toString()})(${JSON.stringify(workerSource).replaceAll('<', '\\u003c')})</script>`

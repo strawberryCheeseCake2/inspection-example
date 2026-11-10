@@ -105,8 +105,16 @@ select { color: var(--ink); font-size: 13px; font-weight: 600; background: var(-
 .canvas-shell iframe { position: absolute; display: block; width: 100%; height: 100%; border: 0; }
 .canvas-shell iframe[hidden] { display: none; }
 .canvas-overlay { position: absolute; z-index: 1; pointer-events: none; }
+.overlay-guides { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; --overlay-area: #8cf4c833; }
+.overlay-guide, .overlay-guide-halo { vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
+.overlay-guide:not([stroke]) { stroke: #8cf4c8; }
+.overlay-guide { stroke-width: 1.5; }
+circle.overlay-guide { fill: #19211d; }
+.overlay-guide-halo { stroke: #19211ddd; stroke-width: 3.5; }
 .canvas-overlay-values { position: absolute; max-width: 50%; padding: 3px 5px; border-radius: 3px; background: #19211de8; color: #fff; font: 11px/1.35 var(--mono); overflow-wrap: anywhere; }
 .overlay-note { margin: 6px 0 0; font-size: 11px; color: var(--muted); }
+.overlay-options { display: flex; align-items: center; gap: 12px; margin-top: 6px; font-size: 11px; color: var(--muted); }
+.overlay-options label { display: flex; align-items: center; gap: 4px; }
 .timeline { padding: 10px 12px 11px; border-top: 1px solid var(--line); }
 .timeline-top, .step-label, .timeline-controls { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .timeline-top { justify-content: space-between; min-height: 23px; }

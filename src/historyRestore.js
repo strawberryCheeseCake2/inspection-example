@@ -1,13 +1,19 @@
 import { cycleIds, MAX_CYCLES, reportForSelection } from './trace.js'
-import { MAX_DRAWING_COMMANDS, MAX_DRAWING_WINDOWS } from './canvasTrace.js'
+import { MAX_DRAWING_COMMANDS, MAX_DRAWING_WINDOWS, MAX_DRAWING_BYTES } from './canvasTrace.js'
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 const REPLAY_LIMIT = MAX_CYCLES + 55
 const hasAnnotation = (item) => typeof item?.note === 'string' && Array.isArray(item.paths)
   && item.paths.every((path) => typeof path === 'string')
 
-function validCanvasCommand(command) {
+function validCanvasCommand(command, index, commands) {
   if (!Array.isArray(command) || typeof command[0] !== 'string') return false
+  if (command[0] === 'pixels') {
+    const [, png] = command
+    return index === 1 && commands[0][0] === 'size' && command.length === 2
+      && typeof png === 'string' && png.length <= MAX_DRAWING_BYTES / 2
+      && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(png)
+  }
   if (command[0] !== 'size') return true
   const [, width, height] = command
   return command.length === 3 && [width, height].every((size) => Number.isInteger(size) && size >= 0 && size <= 8192)
