@@ -57,21 +57,19 @@ export function createRecorder(send, snapshot, trace, context, functions, limit)
     return result.length > 1600 ? result.slice(0, 1599) + '…' : result
   }
 
-  function capture({ label, line, endLine, functionId }, bindings, baseId = null, stepCycle = cycle) {
-    if (capturing || !Number.isInteger(line) || (!active && baseId === null)) return
+  function capture({ label, line, endLine, functionId }, bindings) {
     capturing = true
     try {
       const state = snapshot()
-      const { event, canvasCursor, readOnly } = context()
+      const { event, canvasCursor, canvasSize } = context()
       const variables = Object.fromEntries((bindings ?? []).map(([name, read]) => {
         // A declared binding can be in scope before its initializer has run.
         try { return [name, describe(read())] } catch { return [name, '[Unavailable]'] }
       }))
-      if (pending.length && pending[0].cycle !== stepCycle) sendPending()
+      if (pending.length && pending[0].cycle !== cycle) sendPending()
       pending.push({
-        id: ++sequence, cycle: stepCycle, event, label, line, endLine, functionId, variables, canvasCursor, readOnly,
+        id: ++sequence, cycle, event, label, line, endLine, functionId, variables, canvasCursor, canvasSize,
         state: JSON.parse(state),
-        baseId,
       })
       if (pending.length >= 2 * limit) pending = pending.slice(-limit)
       flush()
@@ -82,7 +80,6 @@ export function createRecorder(send, snapshot, trace, context, functions, limit)
 
   return {
     get active() { return active },
-    get sequence() { return sequence },
     restore(lastCycle, lastSequence) {
       cycle = lastCycle
       sequence = lastSequence
@@ -92,7 +89,6 @@ export function createRecorder(send, snapshot, trace, context, functions, limit)
       active = true
     },
     end() { active = false },
-    capture,
     enter() {
       return active && !capturing && !context().preview ? { cycle } : null
     },

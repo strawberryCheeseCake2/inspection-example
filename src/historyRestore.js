@@ -65,6 +65,8 @@ export function readHistory(record) {
       || !Number.isSafeInteger(step.line) || !isObject(step.state) || !isObject(step.variables)
       || (step.functionId !== undefined && !Number.isSafeInteger(step.functionId))
       || (step.endLine !== undefined && (!Number.isSafeInteger(step.endLine) || step.endLine < step.line))
+      || (step.canvasSize !== undefined && (!Array.isArray(step.canvasSize) || step.canvasSize.length !== 2
+        || !step.canvasSize.every((value) => Number.isFinite(value) && value > 0)))
       || (step.canvasCursor != null && (!Number.isSafeInteger(step.canvasCursor) || step.canvasCursor < 0
         || (drawings.length ? !hasDrawing(drawings, step.canvasCursor) : step.canvasCursor > MAX_DRAWING_COMMANDS)))
       || typeof step.label !== 'string'
@@ -76,13 +78,13 @@ export function readHistory(record) {
     if (typeof output?.summary === 'string') {
       const cycleCount = Number.isInteger(output.cycleCount) && output.cycleCount >= 1 && output.cycleCount <= MAX_CYCLES
         ? output.cycleCount : 1
-      const plan = { source: 'ai', summary: output.summary, cycleCount, cycleReason: output.cycleReason }
+      const plan = { source: 'ai', summary: output.summary, concern: input?.concern, cycleCount, cycleReason: output.cycleReason }
       if (Array.isArray(output.functions)) {
         plan.functions = output.functions.filter((item) => Number.isInteger(item?.functionId) && hasAnnotation(item))
       } else if (Array.isArray(output.lines)) {
         plan.lines = output.lines.filter((item) => Number.isInteger(item?.line) && hasAnnotation(item))
       }
-      report = plan.functions || plan.lines ? reportForSelection(plan, steps) : { ...plan, cycles: cycleIds(steps), steps: annotations }
+      report = plan.functions || plan.lines ? reportForSelection(plan, steps, source) : { ...plan, cycles: cycleIds(steps), steps: annotations }
     }
     replay = { steps, report, drawings }
   }

@@ -12,6 +12,8 @@ the artwork requires it. Use ordinary Canvas 2D primitives for playback support.
 Lexical variables are recorded automatically. If extra read-only data is useful, define
 trace.record = () => ({ ... }) in debugSource to read small JSON data from existing bindings.
 That function must not mutate the artwork or drive its rendering.
+When lexical previews would truncate existing data needed to explain the algorithm, the attachment
+may expose a compact JSON representation with the metadata needed to interpret it correctly.
 
 Choose a cycle based on the sketch behavior. In debugSource set trace.cycle to 'frame' for an
 update pass, 'event' for an individual input callback, or { start: 'mousePressed', end: 'mouseReleased' }

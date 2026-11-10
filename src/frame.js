@@ -12,11 +12,11 @@ function boot(source, hook, functions, historyLimit, width, height, createRecord
   const copy = (value) => JSON.parse(JSON.stringify(value))
   let event = 'setup'
   let preview = restored?.step ?? null
-  let editing = false
   let fallbackState = {}
   let readState
   let writeState
   let drawing
+  let sketch
   const trace = {
     get state() { return readState?.() ?? fallbackState },
     set state(value) {
@@ -40,7 +40,7 @@ function boot(source, hook, functions, historyLimit, width, height, createRecord
   const recorder = createRecorder(send, snapshot, trace, () => ({
     event, preview,
     get canvasCursor() { return drawing?.cursor() },
-    readOnly: Boolean(drawing || trace.record),
+    get canvasSize() { return sketch?.canvas && sketch.width > 0 && sketch.height > 0 ? [sketch.width, sketch.height] : undefined },
   }), functions, historyLimit)
 
   function snapshot() {
@@ -55,6 +55,7 @@ function boot(source, hook, functions, historyLimit, width, height, createRecord
   }
 
   new p5((p) => {
+    sketch = p
     new Function('p', 'trace', hook, source + '\n//# sourceURL=sketch-user.js')(p, trace, recorder)
     const setup = p.setup
     const draw = p.draw
@@ -82,10 +83,32 @@ function boot(source, hook, functions, historyLimit, width, height, createRecord
       }
     }
 
+    let previewCanvas
+    function publishGeometry() {
+      if (!preview) return
+      const id = preview.id
+      const canvas = previewCanvas
+      if (!canvas || !innerWidth || !innerHeight) return send({ type: 'canvasGeometry', id, geometry: null })
+      const sameSize = canvas.width === p.canvas.width && canvas.height === p.canvas.height
+      const size = drawing && preview.canvasSize ? preview.canvasSize : sameSize ? [p.width, p.height] : null
+      const rect = canvas.getBoundingClientRect()
+      const geometry = size?.every((value) => Number.isFinite(value) && value > 0) && rect.width > 0 && rect.height > 0
+        ? { width: size[0], height: size[1], left: rect.left / innerWidth, top: rect.top / innerHeight,
+          viewWidth: rect.width / innerWidth, viewHeight: rect.height / innerHeight }
+        : null
+      send({ type: 'canvasGeometry', id, geometry })
+    }
+    window.addEventListener('resize', publishGeometry)
+
     function showPreview() {
-      if (!drawing) return render()
-      const saved = restored && preview.id <= restored.latest.id ? restored.drawings : undefined
-      drawing.show(preview.canvasCursor, saved)
+      if (drawing) {
+        const saved = restored && preview.id <= restored.latest.id ? restored.drawings : undefined
+        previewCanvas = drawing.show(preview.canvasCursor, saved)
+      } else {
+        render()
+        previewCanvas = p.canvas
+      }
+      publishGeometry()
     }
 
     function run(name, handler) {
@@ -93,62 +116,23 @@ function boot(source, hook, functions, historyLimit, width, height, createRecord
       return handler()
     }
 
-    function edit(label, mutate) {
-      if (!preview || drawing || trace.record) return
-      const liveState = trace.state
-      const before = JSON.stringify(preview.state)
-      trace.state = preview.state
-      try {
-        mutate()
-        const json = snapshot()
-        preview.state = JSON.parse(json)
-        if (json === before) return
-        event = 'stateEdit'
-        recorder.capture({ ...preview, label }, null, preview.id, preview.cycle)
-        preview.id = recorder.sequence
-      } finally {
-        trace.state = liveState
-      }
-      render()
-    }
-
-    function setValue(path, value) {
-      const key = path.at(-1)
-      let target = trace.state
-      for (const part of path.slice(0, -1)) {
-        if (!target || typeof target !== 'object' || !Object.hasOwn(target, part)) return
-        target = target[part]
-      }
-      if (!target || typeof target !== 'object' || !Object.hasOwn(target, key)) return
-      if (!['number', 'boolean', 'string'].includes(typeof value) || typeof target[key] !== typeof value) return
-      if (typeof value === 'number' && !Number.isFinite(value)) return
-      target[key] = value
-    }
-
     window.addEventListener('message', ({ source: sender, data, ports }) => {
       if (sender !== parent || !data) return
       if (data.type === 'inspect') {
-        const { id, cycle, line, endLine, functionId, canvasCursor, state } = data.step
-        preview = { id, cycle, line, endLine, functionId, canvasCursor, state: copy(state) }
+        const { id, canvasCursor, canvasSize, state } = data.step
+        preview = { id, canvasCursor, canvasSize, state }
         showPreview()
       }
       if (data.type === 'live') {
         preview = null
         if (drawing) drawing.hide()
-        else {
-          if (data.state) trace.state = copy(data.state)
-          if (trace.render || readState?.() !== undefined) render()
-        }
+        else if (trace.render || readState?.() !== undefined) render()
       }
       if (data.type === 'exportDrawing' && ports[0]) {
         const { cursors, id } = data
         const saved = restored && id <= restored.latest.id ? restored.drawings : undefined
         ports[0].postMessage(drawing?.export(cursors, saved))
         ports[0].close()
-      }
-      if (data.type === 'edit') {
-        const { path, value } = data
-        edit(path.join('.'), () => setValue(path, value))
       }
     })
 
@@ -199,14 +183,7 @@ function boot(source, hook, functions, historyLimit, width, height, createRecord
         if (name.startsWith('mouse') && !pressedOnCanvas) return
         if (name === 'mouseReleased') pressedOnCanvas = false
         if (name === 'keyPressed' && document.activeElement !== p.canvas) return
-        if (preview) {
-          if (name === 'mousePressed') editing = true
-          if (editing && trace.manipulate && name.startsWith('mouse')) {
-            edit('Canvas manipulation', () => trace.manipulate(p.mouseX, p.mouseY, name))
-          }
-          if (name === 'mouseReleased') editing = false
-          return
-        }
+        if (preview) return
         const eventCycle = cycle === 'event'
         const frameStart = cycle === 'frame' && !recorder.active
         if (cycle?.start === name || (handler && (eventCycle || frameStart))) recorder.begin()

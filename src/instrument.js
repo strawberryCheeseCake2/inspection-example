@@ -105,5 +105,8 @@ export function instrument(source) {
     transformed += source.slice(offset, at) + text
     offset = at
   }
-  return { source: transformed + source.slice(offset), hook, functions: functions.sort((a, b) => a.functionId - b.functionId) }
+  const sketchBindings = scopes.globalScope.variables.filter(({ defs }) => defs.some(({ type }) => type === 'Variable'))
+    .map(({ name }) => name)
+  return { source: transformed + source.slice(offset), hook, sketchBindings,
+    functions: functions.sort((a, b) => a.functionId - b.functionId) }
 }

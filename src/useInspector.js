@@ -3,7 +3,7 @@ import { frameDocument } from './frame.js'
 import { HISTORY_LIMIT } from './recorder.js'
 import { MAX_CYCLES } from './trace.js'
 
-const fresh = (cycle = 0) => ({ cycle, steps: [], picked: null, report: null, editedHead: null, restored: false })
+const fresh = (cycle = 0) => ({ cycle, steps: [], picked: null, report: null, restored: false })
 
 function trimHistory(steps) {
   let cycles = 1
@@ -36,6 +36,7 @@ export function useInspector(initialSource, initialDebugSource) {
   }))
   const [history, setHistory] = useState(() => fresh())
   const [ready, setReady] = useState(false)
+  const [canvasGeometry, setCanvasGeometry] = useState(null)
   const live = history.picked === null
   const focused = history.report && new Set(history.report.steps.map(({ id }) => id))
   const steps = focused ? history.steps.filter(({ id }) => focused.has(id)) : history.steps
@@ -45,32 +46,10 @@ export function useInspector(initialSource, initialDebugSource) {
     function receive({ source, data }) {
       if (source !== frame.current?.contentWindow || !data) return
       if (data.type === 'ready') setReady(true)
+      if (data.type === 'canvasGeometry') setCanvasGeometry(data)
       if (data.type === 'steps') setHistory((current) => {
-        const edits = data.steps[0]?.baseId != null
-        if (edits ? !holding.current : holding.current || data.cycle < current.cycle) return current
-        let next = { ...current, cycle: Math.max(current.cycle, data.cycle) }
-        let steps = current.steps.slice()
-        for (let incoming of data.steps) {
-          if (incoming.baseId !== null) {
-            const base = steps.find(({ id }) => id === incoming.baseId)
-            if (!base) continue
-            incoming = { ...incoming, variables: base.variables }
-            steps = steps.filter(({ id }) => id <= incoming.baseId)
-            const annotation = next.report?.source === 'ai'
-              && next.report.steps.find(({ id }) => id === base.id)
-            const report = annotation ? {
-              ...next.report,
-                cycles: next.report.cycles.filter((cycle) => cycle <= base.cycle),
-              steps: [
-                ...next.report.steps.filter(({ id }) => id <= base.id),
-                { id: incoming.id, note: '상태를 직접 편집한 스텝입니다.', paths: annotation.paths },
-              ],
-            } : null
-            next = { ...next, picked: incoming.id, report, editedHead: incoming }
-          }
-          steps.push(incoming)
-        }
-        return { ...next, steps: trimHistory(steps) }
+        if (holding.current || data.cycle < current.cycle) return current
+        return { ...current, cycle: data.cycle, steps: trimHistory(current.steps.concat(data.steps)) }
       })
     }
     window.addEventListener('message', receive)
@@ -90,6 +69,7 @@ export function useInspector(initialSource, initialDebugSource) {
       ...fresh(latest.cycle), steps: replay.steps, picked: step.id, report: replay.report, restored: true,
     } : fresh())
     setReady(false)
+    setCanvasGeometry(null)
     setRun((current) => ({ id: current.id + 1, source, debugSource, document }))
   }
 
@@ -103,9 +83,9 @@ export function useInspector(initialSource, initialDebugSource) {
   function toggleLive() {
     if (live) return seek(step)
     holding.current = false
-    send({ type: 'live', state: history.editedHead?.state })
+    send({ type: 'live' })
     setHistory((current) => current.restored ? fresh(current.cycle) : {
-      ...current, picked: null, report: null, editedHead: null,
+      ...current, picked: null, report: null,
     })
   }
 
@@ -138,8 +118,8 @@ export function useInspector(initialSource, initialDebugSource) {
 
   return {
     frame, run, ready, live, step, steps, seek, restart, toggleLive, applyReport, exportDrawing,
+    canvasGeometry: canvasGeometry?.id === step?.id ? canvasGeometry?.geometry : null,
     report: history.report, recorded: history.steps,
-    edit: (path, value) => send({ type: 'edit', path, value }),
     showAll: () => setHistory((current) => ({ ...current, report: null })),
   }
 }

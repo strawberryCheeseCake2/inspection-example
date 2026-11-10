@@ -4,48 +4,22 @@ import { Icon } from './Icon.jsx'
 
 const displayPath = (path) => path.replace(/^@/, '').replace(/\.(\d+)(?=\.|$)/g, '[$1]')
 
-function Value({ path, value, onEdit, disabled }) {
-  if (typeof value === 'boolean') {
-    return <button className="value toggle" type="button" role="switch" aria-label={path}
-      aria-checked={value} onClick={() => onEdit(!value)} disabled={disabled}>{String(value)}</button>
-  }
-  if (typeof value === 'number' || typeof value === 'string') {
-    const numeric = typeof value === 'number'
-    return <input className="value" type={numeric ? 'number' : 'text'} step="any" aria-label={path}
-      key={value} defaultValue={value} readOnly={disabled}
-      onBlur={(e) => {
-        const next = numeric ? e.target.valueAsNumber : e.target.value
-        if ((!numeric || Number.isFinite(next)) && next !== value) onEdit(next)
-        else e.target.value = value
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') e.currentTarget.blur()
-        if (e.key === 'Escape') {
-          e.currentTarget.value = value
-          e.currentTarget.blur()
-        }
-      }} />
-  }
-  return <output className="value read-only">null</output>
-}
-
-function StateValue({ path, value, live, onEdit }) {
+function StateValue({ value }) {
   const [open, setOpen] = useState(false)
   if (value === null || typeof value !== 'object') {
-    return <Value path={displayPath(path.join('.'))} value={value} disabled={live}
-      onEdit={(next) => onEdit(path, next)} />
+    return <output className="value" title={String(value)}>{String(value)}</output>
   }
   const array = Array.isArray(value)
   const keys = Object.keys(value)
   return <details onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary>{array ? `[${value.length}]` : `{${keys.length}}`}</summary>
     {open && <dl>{keys.map((key) => <div key={key}>
-      <dt>{key}</dt><dd><StateValue path={[...path, key]} value={value[key]} live={live} onEdit={onEdit} /></dd>
+      <dt>{key}</dt><dd><StateValue value={value[key]} /></dd>
     </div>)}</dl>}
   </details>
 }
 
-export function RuntimeState({ step, report, live, onEdit }) {
+export function RuntimeState({ step, report }) {
   const annotation = report?.steps.find(({ id }) => id === step?.id)
   const focused = report?.source === 'ai'
   const fields = [...new Set(annotation?.paths)].flatMap((path) => {
@@ -54,7 +28,6 @@ export function RuntimeState({ step, report, live, onEdit }) {
   })
   const variables = Object.entries(step?.variables ?? {})
   const state = Object.entries(step?.state ?? {})
-  const disabled = live || step?.readOnly
   return <section className="panel state-panel" aria-label="런타임 상태">
     <div className="panel-header">
       <div className="panel-title"><Icon name="sliders" /><h2>런타임 상태</h2></div>
@@ -69,10 +42,7 @@ export function RuntimeState({ step, report, live, onEdit }) {
     {focused && step && (fields.length ? <div className="variables" key={step.id}>
       {fields.map(({ path, value }) => <div className="variable" key={path}>
         <code title={path}>{displayPath(path)}</code>
-        {path.startsWith('@')
-          ? <output className="value read-only" title={value}>{value}</output>
-          : <StateValue path={Object.hasOwn(step.state, path) ? [path] : path.split('.')}
-            value={value} live={disabled} onEdit={onEdit} />}
+        <StateValue value={value} />
       </div>)}
     </div> : <p className="empty">이 스텝에서 AI가 선택한 변수가 없어요.</p>)}
     {!report && !variables.length && !state.length && <p className="empty">기록된 변수가 여기에 표시됩니다.</p>}
@@ -83,9 +53,9 @@ export function RuntimeState({ step, report, live, onEdit }) {
       </div>)}</dl>
     </div>}
     {!focused && !!state.length && <div className="bindings">
-      <strong>스케치 상태 {step.readOnly ? '(읽기 전용)' : live ? '(일시정지 후 편집)' : '(편집 가능)'}</strong>
+      <strong>스케치 상태</strong>
       <dl>{state.map(([name, value]) => <div key={name}>
-        <dt>{name}</dt><dd><StateValue path={[name]} value={value} live={disabled} onEdit={onEdit} /></dd>
+        <dt>{name}</dt><dd><StateValue value={value} /></dd>
       </div>)}</dl>
     </div>}
   </section>

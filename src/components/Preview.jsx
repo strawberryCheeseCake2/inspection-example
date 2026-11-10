@@ -1,9 +1,16 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { Icon } from './Icon.jsx'
+import { VisualizationOverlay } from './VisualizationOverlay.jsx'
+import { overlaySite } from '../overlay.js'
 
-export function Preview({ frame, run, ready, live, step, steps, report, seek, toggleLive, showAll, onReset }) {
+export function Preview({ frame, run, ready, live, step, steps, recorded, report, seek, toggleLive, showAll, onReset,
+  overlay, overlayBusy, busy, onGenerateOverlay, onCloseOverlay, canvasGeometry }) {
+  const [overlayStatus, setOverlayStatus] = useState(null)
   const index = steps.findIndex(({ id }) => id === step?.id)
   const cycle = report?.cycles.indexOf(step?.cycle) ?? -1
+  const annotation = report?.steps.find(({ id }) => id === step?.id)
+  const sitePlan = annotation && overlay?.bySite?.[overlaySite(step)]
+  const code = sitePlan?.code
 
   return <section className="panel preview-panel" aria-label="스케치 및 실행 스텝">
     <div className="panel-header">
@@ -17,6 +24,8 @@ export function Preview({ frame, run, ready, live, step, steps, report, seek, to
     </div>
     <div className="canvas-shell">
       <iframe key={run.id} ref={frame} sandbox="allow-scripts" title="p5.js 스케치 캔버스" srcDoc={run.document} />
+      {ready && code && canvasGeometry && <VisualizationOverlay key={step.id} step={step} recorded={recorded} code={code}
+        geometry={canvasGeometry} onStatus={setOverlayStatus} />}
     </div>
     <div className="timeline">
       <div className="timeline-top">
@@ -41,7 +50,14 @@ export function Preview({ frame, run, ready, live, step, steps, report, seek, to
           onChange={(e) => seek(steps[e.target.valueAsNumber])} />
         <button className="button icon-button" type="button" onClick={() => seek(steps[index + 1])}
           disabled={index < 0 || index >= steps.length - 1} title="다음 스텝" aria-label="다음 스텝"><Icon name="right" size={15} /></button>
+        {annotation && !overlay && <button className="button" type="button" disabled={busy || !ready}
+          onClick={onGenerateOverlay}>{overlayBusy ? '오버레이 생성 중…' : '시각화 오버레이 생성'}</button>}
+        {annotation && overlay && <button className="button" type="button" onClick={onCloseOverlay}>오버레이 닫기</button>}
       </div>
+      {annotation && overlay && !code && <p className="overlay-note">{sitePlan?.skipReason || '이 스텝의 기록으로 표시할 오버레이가 없어요.'}</p>}
+      {code && !canvasGeometry && <p className="overlay-note">이 스텝의 캔버스 위치를 확인할 수 없어요.</p>}
+      {code && overlayStatus?.step === step && overlayStatus.code === code && overlayStatus.message &&
+        <p className="overlay-note" role="status">{overlayStatus.message}</p>}
     </div>
   </section>
 }

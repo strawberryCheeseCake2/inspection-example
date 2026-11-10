@@ -248,6 +248,7 @@ export function createCanvasTrace(p, limit, rolling, windowLimit) {
         replay[name](...args)
       }
     }
+    return overlay
   }
 
   return {

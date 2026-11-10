@@ -3,9 +3,11 @@ import { createHistory, readAnalysisHistory, saveHistory } from './ai-history.js
 import sketchContract from './prompts/generate.js'
 import editInstructions from './prompts/edit.js'
 import analysisInstructions from './prompts/analyze.js'
+import overlayInstructions from './prompts/overlay.js'
 import { instrument, isDebugCandidate } from '../src/instrument.js'
 import { readHistory } from '../src/historyRestore.js'
 import { MAX_CYCLES } from '../src/trace.js'
+import { checkedOverlay } from '../src/overlay.js'
 
 const string = { type: 'string' }
 const object = (properties) => ({
@@ -27,14 +29,20 @@ const analysis = object({
       functionId: { type: 'integer' },
       note: string,
       paths: { type: 'array', items: string },
+      focusLines: { type: 'array', items: { type: 'integer' } },
     }),
   },
+})
+
+const overlay = object({
+  plans: { type: 'array', items: object({ site: { type: 'integer' }, code: string, skipReason: string }) },
 })
 
 const tasks = {
   generate: { schema: generation, instructions: sketchContract, maxTokens: 8000 },
   edit: { schema: revision, instructions: editInstructions, maxTokens: 8000 },
   analyze: { schema: analysis, instructions: analysisInstructions(MAX_CYCLES), maxTokens: 4000 },
+  overlay: { schema: overlay, instructions: overlayInstructions, maxTokens: 5500 },
 }
 
 const validDebugSource = (value) => typeof value === 'string' && value.length <= 12000
@@ -116,7 +124,7 @@ export function inspectorApi(env, historyDirectory = resolve('ai-history')) {
   const enabled = Boolean(env.OPENAI_API_KEY?.trim())
   async function middleware(req, res, next) {
     const task = req.url?.split('?')[0]
-    if (!['/api/status', '/api/generate', '/api/edit', '/api/analyze', '/api/analyze/replay'].includes(task)) return next()
+    if (!['/api/status', '/api/generate', '/api/edit', '/api/analyze', '/api/analyze/replay', '/api/overlay'].includes(task)) return next()
     const method = task === '/api/status' ? 'GET' : 'POST'
     if (req.method !== method) return reply(res, 405, { error: '지원하지 않는 요청입니다.' })
     if (task === '/api/status') return reply(res, 200, { enabled })
@@ -143,7 +151,9 @@ export function inspectorApi(env, historyDirectory = resolve('ai-history')) {
     }
     res.once('close', disconnect)
     try {
-      const body = await readBody(req, task === '/api/analyze/replay' ? 32 * 1024 * 1024 : 200000)
+      const bodyLimit = task === '/api/analyze/replay' ? 32 * 1024 * 1024
+        : task === '/api/overlay' ? 1024 * 1024 : 200000
+      const body = await readBody(req, bodyLimit)
       if (controller.signal.aborted) return
       if (task === '/api/analyze/replay') {
         const record = await readAnalysisHistory(historyDirectory, body?.historyRef)
@@ -186,9 +196,22 @@ export function inspectorApi(env, historyDirectory = resolve('ai-history')) {
       if (typeof source !== 'string' || !source.trim() || source.length > 30000 || !validDebugSource(debugSource)) {
         return respond(400, { error: '실행 코드를 확인해 주세요.' })
       }
-      const recordableFunctions = instrument(source).functions.filter(isDebugCandidate)
+      if (task === '/api/overlay') {
+        const { evidence } = body
+        if (!Array.isArray(evidence) || !evidence.length || evidence.length > 32 || evidence.some((row) =>
+          !Number.isSafeInteger(row?.id) || !Number.isSafeInteger(row.site)
+          || ![row.variables, row.state].every((value) => value && typeof value === 'object' && !Array.isArray(value)))) {
+          return respond(400, { error: '오버레이에 사용할 실행 기록을 확인해 주세요.' })
+        }
+        const plan = await requestModel('overlay', { concern: body.concern, source, debugSource, evidence })
+        const result = checkedOverlay(plan, evidence)
+        if (!result) return respond(502, { error: '일부 함수의 오버레이 응답이 빠졌거나 형식이 올바르지 않아요. 다시 생성해 주세요.' })
+        return respond(200, result)
+      }
+      const { functions: instrumentedFunctions, sketchBindings } = instrument(source)
+      const recordableFunctions = instrumentedFunctions.filter(isDebugCandidate)
       const sites = new Set(recordableFunctions.map(({ functionId }) => functionId))
-      const plan = await requestModel('analyze', { concern: body.concern, source, debugSource, recordableFunctions })
+      const plan = await requestModel('analyze', { concern: body.concern, source, debugSource, recordableFunctions, sketchBindings })
       if (!Number.isInteger(plan.cycleCount) || plan.cycleCount < 1 || plan.cycleCount > MAX_CYCLES
         || typeof plan.cycleReason !== 'string' || !plan.cycleReason.trim()) {
         return respond(502, { error: 'AI 응답에서 볼 사이클 수를 확인할 수 없어요.' })

@@ -8,6 +8,7 @@ import { sketches } from './sketches/index.js'
 import { localAnalysis, reportForSelection } from './trace.js'
 import { hasDrawing, readHistory, replayForReport } from './historyRestore.js'
 import { useInspector } from './useInspector.js'
+import { overlayEvidence, overlaySite } from './overlay.js'
 import './style.css'
 
 const generatedSketch = { id: 'generated', file: 'generated-sketch.js', hint: '캔버스와 상호작용해 실행을 기록하세요.' }
@@ -34,6 +35,7 @@ function App() {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [requestNotice, setRequestNotice] = useState('')
+  const [overlay, setOverlay] = useState(null)
   const activeRequest = useRef(null)
   const historyFile = useRef(null)
   const inspector = useInspector(initial.source, initial.debugSource)
@@ -65,6 +67,7 @@ function App() {
     setRequestNotice('')
     try {
       inspector.restart(code, debugCode, replay)
+      setOverlay(null)
       return true
     } catch (err) {
       setError(err.message)
@@ -110,7 +113,7 @@ function App() {
   }
 
   async function perform(task) {
-    const prompt = concern.trim()
+    const prompt = (task === 'overlay' ? inspector.report?.concern ?? concern : concern).trim()
     if (!prompt || activeRequest.current || (task === 'edit' && !source.trim())) return
     setError('')
     setRequestNotice('')
@@ -120,12 +123,16 @@ function App() {
     }
     if (task === 'analyze') {
       if (!recorded.length) return
+      setOverlay(null)
       inspector.seek(step ?? recorded.at(-1))
       if (!enabled) {
         inspector.applyReport(localAnalysis(prompt, run.source, recorded), recorded)
         return
       }
     }
+
+    const evidence = task === 'overlay' && inspector.report && overlayEvidence(recorded, inspector.report, step)
+    if (task === 'overlay' && !evidence?.length) return
 
     const controller = new AbortController()
     const pending = { controller, resumeOnCancel: task === 'analyze' && inspector.live }
@@ -135,6 +142,7 @@ function App() {
       const body = { concern: prompt }
       if (task === 'edit') Object.assign(body, { source, debugSource })
       if (task === 'analyze') Object.assign(body, { source: run.source, debugSource: run.debugSource })
+      if (task === 'overlay') Object.assign(body, { source: run.source, debugSource: run.debugSource, evidence })
       const result = await request(task, body, controller.signal)
       if (controller.signal.aborted) return
       if (task === 'generate') {
@@ -147,8 +155,14 @@ function App() {
         setDebugSource(result.debugSource)
         const changed = result.source !== source || result.debugSource !== debugSource
         setRequestNotice(changed ? '코드를 수정했습니다. 실행을 눌러 확인하세요.' : '현재 코드에 변경 사항이 없습니다.')
+      } else if (task === 'overlay') {
+        setOverlay(result)
+        if (!step || !result.bySite[overlaySite(step)]?.code) {
+          const target = inspector.steps.findLast((candidate) => result.bySite[overlaySite(candidate)]?.code)
+          if (target) inspector.seek(target)
+        }
       } else {
-        const report = reportForSelection(result, recorded)
+        const report = reportForSelection({ ...result, concern: prompt }, recorded, run.source)
         inspector.applyReport(report, recorded)
         const replay = replayForReport(run.debugSource, recorded, report)
         try {
@@ -229,10 +243,12 @@ function App() {
           line={inspector.live ? null : step?.line} endLine={step?.endLine}
           dirty={source !== run.source || debugSource !== run.debugSource}
           run={() => restart(source, debugSource)} />
-        <div className="inspection" inert={busy === 'analyze' ? true : undefined}>
-          <Preview {...inspector} onReset={() => restart(run.source, run.debugSource)} />
+        <div className="inspection" inert={busy === 'analyze' || busy === 'overlay' ? true : undefined}>
+          <Preview {...inspector} overlay={overlay} overlayBusy={busy === 'overlay'} busy={Boolean(busy)}
+            onGenerateOverlay={() => perform('overlay')} onCloseOverlay={() => setOverlay(null)}
+            onReset={() => restart(run.source, run.debugSource)} />
           <p className="canvas-hint">{sketch.hint}</p>
-          <RuntimeState step={step} report={inspector.report} live={inspector.live} onEdit={inspector.edit} />
+          <RuntimeState step={step} report={inspector.report} />
         </div>
       </div>
     </main>
