@@ -3,15 +3,17 @@ import { Icon } from './Icon.jsx'
 import { VisualizationOverlay } from './VisualizationOverlay.jsx'
 import { overlaySite } from '../overlay.js'
 
-export function Preview({ frame, run, ready, live, step, steps, recorded, report, seek, toggleLive, showAll, onReset,
+export function Preview({ frame, run, ready, live, step, steps, overlayContextFor, report, seek, toggleLive, showAll, onReset,
   overlay, overlayBusy, busy, onGenerateOverlay, onCloseOverlay, canvasGeometry }) {
   const [overlayStatus, setOverlayStatus] = useState(null)
   const [showLabels, setShowLabels] = useState(true)
+  const [accumulation, setAccumulation] = useState(null)
   const index = steps.findIndex(({ id }) => id === step?.id)
   const cycle = report?.cycles.indexOf(step?.cycle) ?? -1
   const annotation = report?.steps.find(({ id }) => id === step?.id)
   const sitePlan = annotation && overlay?.bySite?.[overlaySite(step)]
   const code = sitePlan?.code
+  const accumulate = accumulation && accumulation.overlay === overlay ? accumulation.checked : Boolean(sitePlan?.accumulate)
 
   return <section className="panel preview-panel" aria-label="스케치 및 실행 스텝">
     <div className="panel-header">
@@ -25,8 +27,8 @@ export function Preview({ frame, run, ready, live, step, steps, recorded, report
     </div>
     <div className="canvas-shell">
       <iframe key={run.id} ref={frame} sandbox="allow-scripts" title="p5.js 스케치 캔버스" srcDoc={run.document} />
-      {ready && code && canvasGeometry && <VisualizationOverlay key={step.id} step={step} recorded={recorded} code={code}
-        accumulate={sitePlan.accumulate} showLabels={showLabels} geometry={canvasGeometry} onStatus={setOverlayStatus} />}
+      {ready && code && canvasGeometry && <VisualizationOverlay key={step.id} step={step} loadContext={overlayContextFor} code={code}
+        accumulate={accumulate} showLabels={showLabels} geometry={canvasGeometry} onStatus={setOverlayStatus} />}
     </div>
     <div className="timeline">
       <div className="timeline-top">
@@ -36,7 +38,7 @@ export function Preview({ frame, run, ready, live, step, steps, recorded, report
         </div>
         <span className="trace-count" aria-live="polite">
           {cycle >= 0 && report.cycles.length > 1 && `사이클 ${cycle + 1}/${report.cycles.length} · `}
-          {`${steps.length} STEPS`}{report && <> <button type="button" onClick={showAll}>전체 기록</button></>}
+          {`${steps.length} STEPS`}{report && <> <button type="button" onClick={showAll}>최근 기록</button></>}
         </span>
       </div>
       <div className="timeline-controls">
@@ -57,11 +59,14 @@ export function Preview({ frame, run, ready, live, step, steps, recorded, report
       </div>
       {code && <div className="overlay-options">
         <label><input type="checkbox" checked={showLabels} onChange={(event) => setShowLabels(event.target.checked)} />변수 라벨</label>
-        {sitePlan.accumulate && <span>선택한 스텝까지 가이드 누적</span>}
+        <label title="선택한 스텝까지 같은 사이클의 같은 코드 위치에서 나온 가이드를 함께 표시">
+          <input type="checkbox" checked={accumulate}
+          onChange={(event) => setAccumulation({ overlay, checked: event.target.checked })} />같은 사이클의 가이드 누적</label>
       </div>}
       {annotation && overlay && !code && <p className="overlay-note">{sitePlan?.skipReason || '이 스텝의 기록으로 표시할 오버레이가 없어요.'}</p>}
       {code && !canvasGeometry && <p className="overlay-note">이 스텝의 캔버스 위치를 확인할 수 없어요.</p>}
-      {code && overlayStatus?.step === step && overlayStatus.code === code && overlayStatus.message &&
+      {code && overlayStatus?.step === step && overlayStatus.code === code &&
+        overlayStatus.accumulate === accumulate && overlayStatus.message &&
         <p className="overlay-note" role="status">{overlayStatus.message}</p>}
     </div>
   </section>

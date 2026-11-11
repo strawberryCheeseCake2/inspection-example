@@ -122,7 +122,7 @@ function sampleSnapshot(snapshot, paths, budget) {
   return { ...snapshot, ...data, omitted }
 }
 
-export function overlayEvidence(steps, report, current) {
+export async function overlayEvidence(steps, report, current, loadContext, signal) {
   const annotations = new Map(report.steps.map(({ id, paths }) => [id, paths]))
   const groups = new Map()
   if (current && annotations.has(current.id)) groups.set(overlaySite(current), [])
@@ -132,14 +132,15 @@ export function overlayEvidence(steps, report, current) {
     if (!groups.has(site)) groups.set(site, [])
     groups.get(site).push(step)
   }
-  return [...groups.values()].slice(0, 16).flatMap((group) => {
+  return Promise.all([...groups.values()].slice(0, 16).flatMap((group) => {
     const samples = new Set([group.find(({ id }) => id === current?.id), group.at(-1), group[0]])
-    return [...samples].filter(Boolean).slice(0, 2).map((step) => {
+    return [...samples].filter(Boolean).slice(0, 2).map(async (step) => {
       const paths = annotations.get(step.id)
-      const context = overlayContext(steps, step, 4).map((snapshot) => sampleSnapshot(snapshot, [], 750))
+      const rows = await loadContext(step, false, signal)
+      const context = overlayContext(rows, step, 4).map((snapshot) => sampleSnapshot(snapshot, [], 750))
       return { ...sampleSnapshot(overlaySnapshot(step), paths, 5000), paths, context }
     })
-  })
+  }))
 }
 
 export function checkedOverlay(plan, evidence) {

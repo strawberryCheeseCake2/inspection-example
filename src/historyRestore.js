@@ -1,4 +1,4 @@
-import { cycleIds, MAX_CYCLES, reportForSelection } from './trace.js'
+import { cycleIds, MAX_CYCLES, MAX_DEBUG_STEPS, reportForSelection } from './trace.js'
 import { MAX_DRAWING_COMMANDS, MAX_DRAWING_WINDOWS, MAX_DRAWING_BYTES } from './canvasTrace.js'
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -31,13 +31,8 @@ export function replayForReport(debugSource, recorded, report) {
   const matches = range.filter(({ id }) => matchedIds.has(id))
   const lastInCycle = new Map(range.map((step) => [step.cycle, step]))
   for (const step of matches) lastInCycle.set(step.cycle, step)
-  const latestPerFunction = new Map(matches.map((step) => [step.functionId ?? step.line, step]))
-  const selected = new Set([range.at(-1), ...lastInCycle.values(), ...latestPerFunction.values()])
-  const limit = cycles.size + 55
-  for (let index = matches.length - 1; index >= 0 && selected.size < limit; index--) {
-    selected.add(matches[index])
-  }
-  return { debugSource, steps: [...selected].sort((a, b) => a.id - b.id) }
+  const selected = new Set([...matches, ...lastInCycle.values(), range.at(-1)])
+  return { debugSource, steps: [...selected].sort((a, b) => a.id - b.id), reportSteps: report.steps }
 }
 
 export function readHistory(record) {
@@ -57,7 +52,7 @@ export function readHistory(record) {
 
   let replay
   if (record.task === 'analyze' && record.replay) {
-    const { steps, commands } = record.replay
+    const { steps, commands, reportSteps } = record.replay
     const drawings = record.replay.drawings ?? (commands === undefined ? [] : [{ first: 0, offset: 0, commands }])
     if (!Array.isArray(drawings) || drawings.length > MAX_DRAWING_WINDOWS || drawings.some((entry) =>
       !Number.isSafeInteger(entry?.offset) || !Number.isSafeInteger(entry.first) || entry.first < Math.max(0, entry.offset)
@@ -69,6 +64,7 @@ export function readHistory(record) {
       !Number.isSafeInteger(step?.id) || step.id <= (steps[index - 1]?.id ?? 0)
       || !Number.isSafeInteger(step.cycle) || step.cycle < (steps[index - 1]?.cycle ?? 0)
       || !Number.isSafeInteger(step.line) || !isObject(step.state) || !isObject(step.variables)
+      || (step.occurrence !== undefined && (!Number.isSafeInteger(step.occurrence) || step.occurrence < 1))
       || (step.functionId !== undefined && !Number.isSafeInteger(step.functionId))
       || (step.endLine !== undefined && (!Number.isSafeInteger(step.endLine) || step.endLine < step.line))
       || (step.canvasSize !== undefined && (!Array.isArray(step.canvasSize) || step.canvasSize.length !== 2
@@ -78,8 +74,12 @@ export function readHistory(record) {
       || typeof step.label !== 'string'
     )) throw new Error('저장된 실행 스텝의 형식이 올바르지 않아요.')
     const ids = new Set(steps.map(({ id }) => id))
+    if (reportSteps !== undefined && (!Array.isArray(reportSteps) || reportSteps.length > MAX_DEBUG_STEPS
+      || reportSteps.some((step) => !ids.has(step?.id) || !hasAnnotation(step)))) {
+      throw new Error('저장된 디버깅 스텝의 형식이 올바르지 않아요.')
+    }
     const annotations = Array.isArray(output?.steps) ? output.steps.filter((step) => ids.has(step?.id)
-      && hasAnnotation(step)) : []
+      && hasAnnotation(step)).slice(0, MAX_DEBUG_STEPS) : []
     let report = null
     if (typeof output?.summary === 'string') {
       const cycleCount = Number.isInteger(output.cycleCount) && output.cycleCount >= 1 && output.cycleCount <= MAX_CYCLES
@@ -90,7 +90,11 @@ export function readHistory(record) {
       } else if (Array.isArray(output.lines)) {
         plan.lines = output.lines.filter((item) => Number.isInteger(item?.line) && hasAnnotation(item))
       }
-      report = plan.functions || plan.lines ? reportForSelection(plan, steps, source) : { ...plan, cycles: cycleIds(steps), steps: annotations }
+      if (reportSteps === undefined && (plan.functions || plan.lines)) {
+        report = reportForSelection(plan, steps, source)
+      } else {
+        report = { ...plan, cycles: cycleIds(steps), steps: reportSteps ?? annotations }
+      }
     }
     replay = { steps, report, drawings }
   }

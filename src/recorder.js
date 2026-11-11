@@ -1,18 +1,19 @@
-export const HISTORY_LIMIT = 3000
+export const RECENT_STEP_LIMIT = 10000
+export const TRACE_BATCH_SIZE = 1000
 
 // Serialized into the sketch iframe alongside its runtime.
-export function createRecorder(send, snapshot, trace, context, functions, limit) {
+export function createRecorder(send, snapshot, trace, context, batchSize) {
   let cycle = 0
   let active = false
   let sequence = 0
   let pending = []
   let scheduled = false
   let capturing = false
-  const sites = new Map(functions.map((site) => [site.functionId, site]))
+  const occurrences = new Map()
 
   function sendPending() {
     if (!pending.length) return
-    send({ type: 'steps', cycle: pending[0].cycle, steps: pending.slice(-limit) })
+    send({ type: 'steps', cycle: pending[0].cycle, steps: pending })
     pending = []
   }
 
@@ -57,22 +58,27 @@ export function createRecorder(send, snapshot, trace, context, functions, limit)
     return result.length > 1600 ? result.slice(0, 1599) + '…' : result
   }
 
-  function capture({ label, line, endLine, functionId }, bindings) {
+  function record(line, bindings) {
+    if (!active || capturing) return
+    const execution = context()
+    if (execution.preview) return
     capturing = true
     try {
       const state = snapshot()
-      const { event, canvasCursor, canvasSize } = context()
-      const variables = Object.fromEntries((bindings ?? []).map(([name, read]) => {
+      const { event, canvasCursor, canvasSize } = execution
+      const variables = Object.fromEntries(bindings().map(([name, read]) => {
         // A declared binding can be in scope before its initializer has run.
         try { return [name, describe(read())] } catch { return [name, '[Unavailable]'] }
       }))
       if (pending.length && pending[0].cycle !== cycle) sendPending()
+      const occurrence = (occurrences.get(line) ?? 0) + 1
+      occurrences.set(line, occurrence)
       pending.push({
-        id: ++sequence, cycle, event, label, line, endLine, functionId, variables, canvasCursor, canvasSize,
+        id: ++sequence, cycle, event, label: `Line ${line}`, line, occurrence, variables, canvasCursor, canvasSize,
         state: JSON.parse(state),
       })
-      if (pending.length >= 2 * limit) pending = pending.slice(-limit)
-      flush()
+      if (pending.length >= batchSize) sendPending()
+      else flush()
     } finally {
       capturing = false
     }
@@ -86,21 +92,14 @@ export function createRecorder(send, snapshot, trace, context, functions, limit)
     },
     begin() {
       cycle++
+      occurrences.clear()
       active = true
     },
     end() { active = false },
-    enter() {
-      return active && !capturing && !context().preview ? { cycle } : null
-    },
-    block(call, bindings) {
-      call.blocks ??= new Map()
-      for (const [name, read] of bindings) call.blocks.set(name, read)
-    },
-    finish(call, functionId) {
-      if (!call || call.cycle !== cycle || !active || capturing || context().preview) return
-      const { name, line, endLine } = sites.get(functionId)
-      const bindings = [...(call.blocks ?? []), ...(call.bindings?.() ?? [])]
-      capture({ label: `${name}()`, line, endLine, functionId }, bindings)
+    line: record,
+    value(line, value, bindings) {
+      record(line, bindings)
+      return value
     },
   }
 }

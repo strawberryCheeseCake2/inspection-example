@@ -4,9 +4,9 @@ import sketchContract from './prompts/generate.js'
 import editInstructions from './prompts/edit.js'
 import analysisInstructions from './prompts/analyze.js'
 import overlayInstructions from './prompts/overlay.js'
-import { instrument, isDebugCandidate } from '../src/instrument.js'
+import { instrument } from '../src/instrument.js'
 import { readHistory } from '../src/historyRestore.js'
-import { MAX_CYCLES } from '../src/trace.js'
+import { MAX_CYCLES, MAX_DEBUG_STEPS, sourceLines, validIterationRange } from '../src/trace.js'
 import { checkedOverlay } from '../src/overlay.js'
 
 const string = { type: 'string' }
@@ -23,13 +23,20 @@ const analysis = object({
   summary: string,
   cycleCount: { type: 'integer', minimum: 1, maximum: MAX_CYCLES },
   cycleReason: string,
-  functions: {
+  lines: {
     type: 'array',
     items: object({
-      functionId: { type: 'integer' },
+      line: { type: 'integer' },
       note: string,
       paths: { type: 'array', items: string },
-      focusLines: { type: 'array', items: { type: 'integer' } },
+      range: { anyOf: [
+        { type: 'null' },
+        object({
+          indexPath: { type: ['string', 'null'] },
+          start: { type: 'integer' },
+          end: { type: 'integer' },
+        }),
+      ] },
     }),
   },
 })
@@ -43,7 +50,7 @@ const overlay = object({
 const tasks = {
   generate: { schema: generation, instructions: sketchContract, maxTokens: 8000 },
   edit: { schema: revision, instructions: editInstructions, maxTokens: 8000 },
-  analyze: { schema: analysis, instructions: analysisInstructions(MAX_CYCLES), maxTokens: 4000 },
+  analyze: { schema: analysis, instructions: analysisInstructions(MAX_CYCLES, MAX_DEBUG_STEPS), maxTokens: 4000 },
   overlay: { schema: overlay, instructions: overlayInstructions, maxTokens: 5500 },
 }
 
@@ -207,22 +214,25 @@ export function inspectorApi(env, historyDirectory = resolve('ai-history')) {
         }
         const plan = await requestModel('overlay', { concern: body.concern, source, debugSource, evidence })
         const result = checkedOverlay(plan, evidence)
-        if (!result) return respond(502, { error: '일부 함수의 오버레이 응답이 빠졌거나 형식이 올바르지 않아요. 다시 생성해 주세요.' })
+        if (!result) return respond(502, { error: '일부 스텝의 오버레이 응답이 빠졌거나 형식이 올바르지 않아요. 다시 생성해 주세요.' })
         return respond(200, result)
       }
-      const { functions: instrumentedFunctions, sketchBindings } = instrument(source)
-      const recordableFunctions = instrumentedFunctions.filter(isDebugCandidate)
-      const sites = new Set(recordableFunctions.map(({ functionId }) => functionId))
-      const plan = await requestModel('analyze', { concern: body.concern, source, debugSource, recordableFunctions, sketchBindings })
+      const { lines: instrumentedLines, sketchBindings } = instrument(source)
+      const code = sourceLines(source)
+      const recordableLines = Object.fromEntries(instrumentedLines.map((line) => [line, code[line - 1].trim()]))
+      const plan = await requestModel('analyze', { concern: body.concern, source, debugSource, recordableLines, sketchBindings })
       if (!Number.isInteger(plan.cycleCount) || plan.cycleCount < 1 || plan.cycleCount > MAX_CYCLES
         || typeof plan.cycleReason !== 'string' || !plan.cycleReason.trim()) {
         return respond(502, { error: 'AI 응답에서 볼 사이클 수를 확인할 수 없어요.' })
       }
-      const functions = [...new Map(plan.functions.filter(({ functionId }) => sites.has(functionId))
-        .map((item) => [item.functionId, item])).values()].slice(0, 12)
+      if (!Array.isArray(plan.lines) || plan.lines.some((item) => !validIterationRange(item?.range))) {
+        return respond(502, { error: 'AI 응답에서 볼 반복 범위를 확인할 수 없어요.' })
+      }
+      const lines = [...new Map(plan.lines.filter(({ line }) => Number.isInteger(line) && Object.hasOwn(recordableLines, line))
+        .map((item) => [item.line, item])).values()].slice(0, 12)
       const historyRef = { id: history.id, startedAt: history.startedAt }
       return respond(200, { summary: plan.summary, cycleCount: plan.cycleCount, cycleReason: plan.cycleReason,
-        functions, source: 'ai', historyRef })
+        lines, source: 'ai', historyRef })
     } catch (error) {
       failure = { name: error.name, message: error.message }
       if (controller.signal.aborted) return

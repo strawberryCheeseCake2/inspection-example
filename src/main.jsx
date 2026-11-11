@@ -5,7 +5,7 @@ import { Icon } from './components/Icon.jsx'
 import { Preview } from './components/Preview.jsx'
 import { RuntimeState } from './components/RuntimeState.jsx'
 import { sketches } from './sketches/index.js'
-import { localAnalysis, reportForSelection } from './trace.js'
+import { localPlan } from './trace.js'
 import { hasDrawing, readHistory, replayForReport } from './historyRestore.js'
 import { useInspector } from './useInspector.js'
 import { overlayEvidence, overlaySite } from './overlay.js'
@@ -123,16 +123,15 @@ function App() {
     }
     if (task === 'analyze') {
       if (!recorded.length) return
-      setOverlay(null)
-      inspector.seek(step ?? recorded.at(-1))
-      if (!enabled) {
-        inspector.applyReport(localAnalysis(prompt, run.source, recorded), recorded)
+      if (recorded.at(-1).functionId !== undefined) {
+        setError('이 기록은 함수 단위로 저장됐어요. 줄 단위로 분석하려면 초기화 후 재실행해 주세요.')
         return
       }
+      setOverlay(null)
+      inspector.seek(step ?? recorded.at(-1))
     }
 
-    const evidence = task === 'overlay' && inspector.report && overlayEvidence(recorded, inspector.report, step)
-    if (task === 'overlay' && !evidence?.length) return
+    if (task === 'overlay' && !inspector.report?.steps.length) return
 
     const controller = new AbortController()
     const pending = { controller, resumeOnCancel: task === 'analyze' && inspector.live }
@@ -142,8 +141,13 @@ function App() {
       const body = { concern: prompt }
       if (task === 'edit') Object.assign(body, { source, debugSource })
       if (task === 'analyze') Object.assign(body, { source: run.source, debugSource: run.debugSource })
-      if (task === 'overlay') Object.assign(body, { source: run.source, debugSource: run.debugSource, evidence })
-      const result = await request(task, body, controller.signal)
+      if (task === 'overlay') {
+        const evidence = await overlayEvidence(inspector.matches, inspector.report, step, inspector.overlayContextFor, controller.signal)
+        if (!evidence.length) return
+        Object.assign(body, { source: run.source, debugSource: run.debugSource, evidence })
+      }
+      const result = task === 'analyze' && !enabled ? localPlan(prompt, run.source)
+        : await request(task, body, controller.signal)
       if (controller.signal.aborted) return
       if (task === 'generate') {
         setSketch(generatedSketch)
@@ -162,9 +166,13 @@ function App() {
           if (target) inspector.seek(target)
         }
       } else {
-        const report = reportForSelection({ ...result, concern: prompt }, recorded, run.source)
-        inspector.applyReport(report, recorded)
-        const replay = replayForReport(run.debugSource, recorded, report)
+        const selection = await inspector.analyze({ ...result, concern: prompt }, controller.signal)
+        controller.signal.throwIfAborted()
+        const { report, recorded: selected, historical } = selection
+        inspector.applyReport(report, selected)
+        if (historical) setRequestNotice('최근 사이클에 해당 실행이 없어 이전 사이클에서 찾은 스텝을 표시해요.')
+        if (!enabled) return
+        const replay = replayForReport(run.debugSource, selected, report)
         try {
           const drawingSteps = replay.steps.filter(({ canvasCursor }) => Number.isInteger(canvasCursor))
           let missingDrawing = false
@@ -236,6 +244,7 @@ function App() {
           <input ref={historyFile} type="file" accept=".json,application/json" hidden onChange={restoreHistory} />
         </div>
         {error && <p className="request-error" role="alert">{error}</p>}
+        {inspector.traceError && <p className="request-error" role="alert">{inspector.traceError}</p>}
         {requestNotice && <p className="request-notice" role="status">{requestNotice}</p>}
       </form>
       <div className="workspace">

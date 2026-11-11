@@ -13,7 +13,7 @@ actually determined its result in the trace. Use the analysis paths as a startin
 them against the code and samples. Prefer a recorded applied value or a decisive input over an
 incidental counter or a variable that happens to be easy to locate on the canvas. If the requested
 behavior is absent, show the recorded values that govern the current behavior.
-Do this independently for every site. If several functions explain different parts of the
+Do this independently for every site. If several lines or legacy function sites explain different parts of the
 concern, each needs its own overlay using its own recorded fields and available geometry.
 
 Set accumulate to false by default, including for empty plans. Set it to true only if earlier
@@ -34,7 +34,7 @@ relationship, or effect of a displayed value on the canvas. A variable's role in
 its name or type, determines how it can be shown.
 
 input.step contains the occurrence being evaluated, with id, site, variables and state. input.context contains
-earlier snapshots in the same cycle, including drawing helpers excluded from the analysis. Use
+earlier snapshots in the same cycle, including lines excluded from the analysis. Use
 values from either source when they belong to the matching call and object. The analysis paths
 do not restrict where to get coordinates. input.width and input.height are logical sketch
 dimensions. Samples may omit large fields; the runtime supplies the recorded data.
@@ -72,7 +72,7 @@ shape, or coordinates based on a variable name. If the needed geometry cannot be
 the variable label and omit the guide. If geometry extends outside the canvas, keep the original
 coordinates and place the label on a visible part of the associated object or region.
 
-The app runs each site's code for every occurrence of that function. Treat the sample IDs as
+The app runs each site's code for every occurrence of that site. Treat the sample IDs as
 examples only. Read values and context for the active occurrence instead of hardcoding sample IDs
 or requiring every field to be present. Show the relevant fields that are present and can be
 placed. Return false if the active occurrence has nothing to show. Only use empty code for a

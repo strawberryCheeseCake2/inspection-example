@@ -3,7 +3,7 @@ export const MAX_DRAWING_WINDOWS = 8
 export const MAX_DRAWING_BYTES = 4_000_000
 
 // Serialized into the sketch iframe.
-export function createCanvasTrace(p, limit, rolling, windowLimit, byteLimit) {
+export function createCanvasTrace(p, limit, rolling, windowLimit, byteLimit, spill) {
   const methods = ('save restore reset scale rotate translate transform setTransform resetTransform ' +
     'clearRect fillRect strokeRect beginPath closePath moveTo lineTo bezierCurveTo quadraticCurveTo ' +
     'arc arcTo ellipse rect roundRect fill stroke clip fillText strokeText setLineDash').split(' ')
@@ -141,7 +141,10 @@ export function createCanvasTrace(p, limit, rolling, windowLimit, byteLimit) {
       commands = prefix = checkpointPrefix([['pixels', png]])
     }
     archived.unshift(journal)
-    if (archived.length >= windowLimit) archived.pop()
+    if (archived.length >= windowLimit) {
+      const { first, offset, commands } = archived.pop()
+      spill?.({ first, offset, commands })
+    }
     journal = { commands, offset: cursor - prefix.length, first: cursor,
       bytes: commands.reduce((total, command) => total + JSON.stringify(command).length, 0) }
     checkpoint = undefined

@@ -32,7 +32,7 @@ function Guide({ type, points, color }) {
   </>
 }
 
-export function VisualizationOverlay({ code, accumulate, showLabels, step, recorded, geometry, onStatus }) {
+export function VisualizationOverlay({ code, accumulate, showLabels, step, loadContext, geometry, onStatus }) {
   const [marks, setMarks] = useState([])
   const [earlierGuides, setEarlierGuides] = useState([])
   const [port, setPort] = useState(null)
@@ -50,7 +50,9 @@ export function VisualizationOverlay({ code, accumulate, showLabels, step, recor
 
   useEffect(() => {
     if (!port) return
-    const targets = overlayOccurrences(recorded, step, accumulate, width, height)
+    const controller = new AbortController()
+    let recorded
+    let targets
     const selected = overlaySnapshot(step)
     const seen = new Set()
     const earlier = []
@@ -62,7 +64,7 @@ export function VisualizationOverlay({ code, accumulate, showLabels, step, recor
 
     function finish(message) {
       setEarlierGuides(earlier.reverse())
-      onStatus({ step, code, message })
+      onStatus({ step, code, accumulate, message })
     }
 
     function next() {
@@ -108,12 +110,22 @@ export function VisualizationOverlay({ code, accumulate, showLabels, step, recor
 
     port.addEventListener('message', receive)
     port.start()
-    next()
-    return () => port.removeEventListener('message', receive)
-  }, [port, code, accumulate, step, recorded, width, height, onStatus])
+    loadContext(step, accumulate, controller.signal).then((rows) => {
+      if (controller.signal.aborted) return
+      recorded = rows
+      targets = overlayOccurrences(recorded, step, accumulate, width, height)
+      next()
+    }).catch(() => {
+      if (!controller.signal.aborted) finish('이 스텝의 실행 기록을 불러올 수 없어요.')
+    })
+    return () => {
+      controller.abort()
+      port.removeEventListener('message', receive)
+    }
+  }, [port, code, accumulate, step, loadContext, width, height, onStatus])
 
   const position = { left: left * 100 + '%', top: top * 100 + '%', width: viewWidth * 100 + '%', height: viewHeight * 100 + '%' }
-  const guides = [...earlierGuides, ...marks.flatMap((mark) => mark.guides)]
+  const guides = [...(accumulate ? earlierGuides : []), ...marks.flatMap((mark) => mark.guides)]
   return <>
     <iframe hidden ref={frame} title="오버레이 계산 환경" sandbox="allow-scripts" srcDoc={overlayDocument} onLoad={connect} />
     {!!(guides.length || (showLabels && marks.length)) && <div className="canvas-overlay" style={position} aria-label="스케치 오버레이">

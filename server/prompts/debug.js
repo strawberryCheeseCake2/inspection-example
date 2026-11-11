@@ -17,10 +17,8 @@ may expose a compact JSON representation with the metadata needed to interpret i
 
 Choose a cycle based on the sketch behavior. In debugSource set trace.cycle to 'frame' for an
 update pass, 'event' for an individual input callback, or { start: 'mousePressed', end: 'mouseReleased' }
-for a complete drag. The inspector automatically creates a step when a function in source exits
-during the active cycle, recording its parameters and variables visible in the function body.
-The inspector uses the function name as the step label. Do not call trace.label or trace.step for individual
-statements. Do not set trace.watch or choose a subset of variables. The later debugging
-analysis selects relevant variables for its own query from the recorded values.
+for a complete drag. During the active cycle the inspector automatically records executable lines
+in source and the declared bindings visible there. Do not add trace.label, trace.step, or trace.watch.
+The later debugging analysis selects relevant lines and variables for its own query.
 Drawing tools start blank and add marks from real user input.
 `
