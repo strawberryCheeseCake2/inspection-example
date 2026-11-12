@@ -17,7 +17,7 @@ function reportMatches(report, steps) {
 }
 
 function reportTarget(report, steps, matches) {
-  return (report?.cycles.length > 1 ? matches[0] : matches.at(-1)) ?? steps.at(-1)
+  return (report?.states || report?.cycles.length > 1 ? matches[0] : matches.at(-1)) ?? steps.at(-1)
 }
 
 export function useInspector(initialSource, initialDebugSource) {
@@ -28,7 +28,7 @@ export function useInspector(initialSource, initialDebugSource) {
   const preview = useRef(null)
   const [run, setRun] = useState(() => ({
     id: 0, source: initialSource, debugSource: initialDebugSource,
-    document: frameDocument(initialSource, initialDebugSource),
+    ...frameDocument(initialSource, initialDebugSource),
   }))
   const [history, setHistory] = useState(fresh)
   const [ready, setReady] = useState(false)
@@ -82,7 +82,7 @@ export function useInspector(initialSource, initialDebugSource) {
     const matches = reportMatches(replay?.report, replay?.steps)
     const target = replay && reportTarget(replay.report, replay.steps, matches)
     const latest = replay?.steps.at(-1)
-    const document = frameDocument(source, debugSource, target ? { step: target, latest, drawings: replay.drawings } : null)
+    const compiled = frameDocument(source, debugSource, target ? { step: target, latest, drawings: replay.drawings } : null)
     const previous = archive.current
     archive.current = createTraceArchive()
     previous.dispose().catch(() => {})
@@ -95,7 +95,7 @@ export function useInspector(initialSource, initialDebugSource) {
     setReady(false)
     setTraceError('')
     setCanvasGeometry(null)
-    setRun((current) => ({ id: current.id + 1, source, debugSource, document }))
+    setRun((current) => ({ id: current.id + 1, source, debugSource, ...compiled }))
   }
 
   function seek(target) {

@@ -1,8 +1,9 @@
-import { annotateReport, cycleIds, matchesRange, MAX_DEBUG_STEPS, sampleRanks } from './trace.js'
+import { annotateReport, cycleIds, matchesRange, MAX_DEBUG_STEPS, sampleRanks, selectFsmSteps, traceSite } from './trace.js'
 
 export async function queryTrace(archive, recent, plan, source, signal) {
   const latest = recent.at(-1)
   const count = plan.cycleCount ?? 1
+  const selections = plan.states ?? plan.lines
 
   async function cyclesThrough(through) {
     const liveCycles = cycleIds(recent.filter((step) => step.cycle <= through)).slice(-count)
@@ -12,19 +13,36 @@ export async function queryTrace(archive, recent, plan, source, signal) {
     return stored.reverse().concat(liveCycles)
   }
 
-  async function scan({ line, range }, from, through, visit) {
+  async function scan({ line, site = line, range }, from, through, visit) {
     if (from > through) return
     signal.throwIfAborted()
+    const matches = (step) => (plan.states ? step.fsm?.kind === 'state' : !step.fsm) && matchesRange(step, range)
     for (let index = recent.length - 1; index >= 0; index--) {
       const step = recent[index]
       if (step.cycle < from) break
-      if (step.cycle <= through && step.line === line && matchesRange(step, range) && visit(step) === false) return
+      if (step.cycle <= through && traceSite(step) === site && matches(step) && visit(step) === false) return
     }
-    await archive.scanLine(line, from, through, recent[0].id - 1,
-      (step) => matchesRange(step, range) ? visit(step) : undefined, signal)
+    await archive.scanSite(site, from, through, recent[0].id - 1,
+      (step) => matches(step) ? visit(step) : undefined, signal)
+  }
+
+  async function collectFsm(cycles) {
+    const matches = []
+    if (!selections.length) return matches
+    const hot = Map.groupBy(recent, (step) => step.cycle)
+    for (const cycle of [...cycles].reverse()) {
+      signal.throwIfAborted()
+      const stored = []
+      await archive.scanCycle(cycle, recent[0].id - 1, (step) => { stored.push(step) }, signal)
+      const rows = stored.reverse().concat(hot.get(cycle) ?? [])
+      matches.push(...selectFsmSteps(plan, rows, MAX_DEBUG_STEPS - matches.length, !matches.length))
+      if (matches.length >= MAX_DEBUG_STEPS) break
+    }
+    return matches
   }
 
   async function collect(cycles) {
+    if (plan.states) return collectFsm(cycles)
     const from = cycles[0]
     const through = cycles.at(-1)
     const groups = await Promise.all(plan.lines.map(async (line) => {
@@ -57,9 +75,9 @@ export async function queryTrace(archive, recent, plan, source, signal) {
 
   let cycles = await cyclesThrough(latest.cycle)
   let matches = await collect(cycles)
-  if (!matches.length && cycles[0] > 0 && plan.lines.length) {
+  if (!matches.length && cycles[0] > 0 && selections.length) {
     // Only fall back when the requested recent span contains no selected execution.
-    const earlier = await Promise.all(plan.lines.map(async (line) => {
+    const earlier = await Promise.all(selections.map(async (line) => {
       let cycle = -1
       await scan(line, 0, cycles[0] - 1, (step) => {
         cycle = step.cycle

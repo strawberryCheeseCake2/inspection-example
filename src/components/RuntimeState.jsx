@@ -2,7 +2,16 @@ import React, { useState } from 'react'
 import { variableAt } from '../trace.js'
 import { Icon } from './Icon.jsx'
 
-const displayPath = (path) => path.replace(/^@/, '').replace(/\.(\d+)(?=\.|$)/g, '[$1]')
+function displayPath(path, fsm) {
+  const name = path.replace(/^@/, '').replace(/\.(\d+)(?=\.|$)/g, '[$1]')
+  if (!fsm) return name
+  const labels = { $fsmData: 'data', $fsmState: 'fsm.currentState', $fsmEvent: 'transition.event', $fsmValue: `data.${fsm.property}` }
+  return Object.hasOwn(labels, name) ? labels[name] : name.replace(/^\$fsmData\./, 'data.')
+}
+
+function decoded(value) {
+  try { return JSON.parse(value) } catch { return value }
+}
 
 function StateValue({ value }) {
   const [open, setOpen] = useState(false)
@@ -21,10 +30,11 @@ function StateValue({ value }) {
 
 export function RuntimeState({ step, report }) {
   const annotation = report?.steps.find(({ id }) => id === step?.id)
-  const focused = report?.source === 'ai'
+  const focused = report?.source === 'ai' || Boolean(report && step?.fsm)
   const fields = [...new Set(annotation?.paths)].flatMap((path) => {
     const value = variableAt(step, path)
-    return value === undefined ? [] : [{ path, value }]
+    const wholeBinding = path.startsWith('@') && !path.includes('.')
+    return value === undefined ? [] : [{ path, value: step.fsm && wholeBinding ? decoded(value) : value }]
   })
   const variables = Object.entries(step?.variables ?? {})
   const state = Object.entries(step?.state ?? {})
@@ -41,22 +51,22 @@ export function RuntimeState({ step, report }) {
     </p>}
     {focused && step && (fields.length ? <div className="variables" key={step.id}>
       {fields.map(({ path, value }) => <div className="variable" key={path}>
-        <code title={path}>{displayPath(path)}</code>
+        <code title={path}>{displayPath(path, step.fsm)}</code>
         <StateValue value={value} />
       </div>)}
     </div> : <p className="empty">이 스텝에서 AI가 선택한 변수가 없어요.</p>)}
     {!report && !variables.length && !state.length && <p className="empty">기록된 변수가 여기에 표시됩니다.</p>}
-    {!focused && !!variables.length && <div className="bindings">
-      <strong>선언 변수 ({variables.length})</strong>
+    {!!variables.length && (!focused || step.fsm) && <details className="bindings" open={!focused || undefined}>
+      <summary>기록된 변수 ({variables.length})</summary>
       <dl>{variables.map(([name, value]) => <div key={name}>
-        <dt>{name}</dt><dd>{value}</dd>
+        <dt>{displayPath(name, step.fsm)}</dt><dd>{step.fsm ? <StateValue value={decoded(value)} /> : value}</dd>
       </div>)}</dl>
-    </div>}
-    {!focused && !!state.length && <div className="bindings">
-      <strong>스케치 상태</strong>
+    </details>}
+    {!!state.length && (!focused || step.fsm) && <details className="bindings" open={!focused || undefined}>
+      <summary>스케치 상태</summary>
       <dl>{state.map(([name, value]) => <div key={name}>
         <dt>{name}</dt><dd><StateValue value={value} /></dd>
       </div>)}</dl>
-    </div>}
+    </details>}
   </section>
 }

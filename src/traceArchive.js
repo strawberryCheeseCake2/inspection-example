@@ -1,3 +1,5 @@
+import { traceSite } from './trace.js'
+
 // The sketch iframe has an opaque origin. Keep the archive in the host page.
 const MAX_ID = Number.MAX_SAFE_INTEGER
 let connection
@@ -19,10 +21,10 @@ function openArchive() {
 
 const bounds = (prefix, from = 0, to = MAX_ID) => IDBKeyRange.bound([...prefix, from], [...prefix, to])
 
-function visitSteps(steps, throughId, visit, line) {
+function visitSteps(steps, throughId, visit, site) {
   for (let index = steps.length - 1; index >= 0; index--) {
     const step = steps[index]
-    if (step.id <= throughId && (line === undefined || step.line === line) && visit(step) === false) return false
+    if (step.id <= throughId && (site === undefined || traceSite(step) === site) && visit(step) === false) return false
   }
 }
 
@@ -86,7 +88,7 @@ export function createTraceArchive() {
         let end = start + 1
         while (end < steps.length && steps[end].cycle === cycle) end++
         const batch = steps.slice(start, end)
-        const lines = [...new Set(batch.map(({ line }) => line))].map((line) => [run, line, cycle, first])
+        const lines = [...new Set(batch.map(traceSite))].map((site) => [run, site, cycle, first])
         chunks.push({ cycle, first, lines, steps: batch })
         start = end
       }
@@ -107,10 +109,10 @@ export function createTraceArchive() {
         }, signal, true)
       return result
     },
-    async scanLine(line, from, through, throughId, visit, signal) {
+    async scanSite(site, from, through, throughId, visit, signal) {
       if (lastStoredCycle < from) return
-      await scan('chunks', 'line', IDBKeyRange.bound([run, line, from, 0], [run, line, through, throughId]),
-        ({ steps }) => visitSteps(steps, throughId, visit, line), signal)
+      await scan('chunks', 'line', IDBKeyRange.bound([run, site, from, 0], [run, site, through, throughId]),
+        ({ steps }) => visitSteps(steps, throughId, visit, site), signal)
     },
     async scanCycle(cycle, throughId, visit, signal) {
       if (lastStoredCycle < cycle || throughId < 1) return

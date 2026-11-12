@@ -1,9 +1,14 @@
 import debugContract from './debug.js'
+import { fsmStructure } from './fsm.js'
 
 export default `
 Create a complete editable p5.js instance-mode sketch for the user's description.
 Return source and debugSource, with no markdown. Keep the sketch focused and the attachment small.
 Do not import anything, instantiate p5, or use network APIs.
+
+Model the artwork with one or more collections of objects and the FSM declarations below.
+Avoid dummy states, fake transitions, redundant checks, error wrappers, and copies of the shared runtime.
+${fsmStructure}
 
 Keep p5 callbacks small and compose them from named helpers with a single responsibility.
 Split substantial work into inspectable operations such as sampling input, deciding whether to

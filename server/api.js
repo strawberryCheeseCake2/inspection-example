@@ -2,9 +2,10 @@ import { resolve } from 'node:path'
 import { createHistory, readAnalysisHistory, saveHistory } from './ai-history.js'
 import sketchContract from './prompts/generate.js'
 import editInstructions from './prompts/edit.js'
-import analysisInstructions from './prompts/analyze.js'
+import analysisInstructions, { fsmAnalysisInstructions } from './prompts/analyze.js'
 import overlayInstructions from './prompts/overlay.js'
 import { instrument } from '../src/instrument.js'
+import { fsmSites, readFsmDiagrams } from '../src/fsmDiagram.js'
 import { readHistory } from '../src/historyRestore.js'
 import { MAX_CYCLES, MAX_DEBUG_STEPS, sourceLines, validIterationRange } from '../src/trace.js'
 import { checkedOverlay } from '../src/overlay.js'
@@ -19,14 +20,14 @@ const revision = object({
   edits: { type: 'array', items: object({ before: string, after: string }) },
   debugSource: string,
 })
-const analysis = object({
+const analysis = (kind, siteKey) => object({
   summary: string,
   cycleCount: { type: 'integer', minimum: 1, maximum: MAX_CYCLES },
   cycleReason: string,
-  lines: {
+  [kind]: {
     type: 'array',
     items: object({
-      line: { type: 'integer' },
+      [siteKey]: { type: 'integer' },
       note: string,
       paths: { type: 'array', items: string },
       range: { anyOf: [
@@ -50,8 +51,14 @@ const overlay = object({
 const tasks = {
   generate: { schema: generation, instructions: sketchContract, maxTokens: 8000 },
   edit: { schema: revision, instructions: editInstructions, maxTokens: 8000 },
-  analyze: { schema: analysis, instructions: analysisInstructions(MAX_CYCLES, MAX_DEBUG_STEPS), maxTokens: 4000 },
+  analyze: { schema: analysis('lines', 'line'), instructions: analysisInstructions(MAX_CYCLES, MAX_DEBUG_STEPS), maxTokens: 4000 },
   overlay: { schema: overlay, instructions: overlayInstructions, maxTokens: 5500 },
+}
+
+const fsmAnalysis = {
+  schema: analysis('states', 'site'),
+  instructions: fsmAnalysisInstructions(MAX_CYCLES, MAX_DEBUG_STEPS),
+  maxTokens: 4000,
 }
 
 const validDebugSource = (value) => typeof value === 'string' && value.length <= 12000
@@ -90,7 +97,7 @@ async function readBody(req, limit) {
 }
 
 function modelRequest(env, task, input) {
-  const { schema, instructions, maxTokens } = tasks[task]
+  const { schema, instructions, maxTokens } = input.recordableStates ? fsmAnalysis : tasks[task]
   return {
     model: env.OPENAI_MODEL || 'gpt-6.1-sol',
     store: false,
@@ -185,6 +192,10 @@ export function inspectorApi(env, historyDirectory = resolve('ai-history')) {
         if (typeof source !== 'string' || !source.trim() || source.length > 30000 || !validDebugSource(debugSource)) {
           return respond(502, { error: '실행할 스케치 코드를 받지 못했습니다.' })
         }
+        const collections = readFsmDiagrams(source)
+        if (!collections.length || collections.some(({ objects }) => !objects.length)) {
+          return respond(502, { error: '생성된 코드에서 컬렉션과 오브젝트의 FSM 선언을 읽을 수 없어요. 다시 생성해 주세요.' })
+        }
         return respond(200, { source, debugSource })
       }
 
@@ -217,22 +228,31 @@ export function inspectorApi(env, historyDirectory = resolve('ai-history')) {
         if (!result) return respond(502, { error: '일부 스텝의 오버레이 응답이 빠졌거나 형식이 올바르지 않아요. 다시 생성해 주세요.' })
         return respond(200, result)
       }
-      const { lines: instrumentedLines, sketchBindings } = instrument(source)
-      const code = sourceLines(source)
-      const recordableLines = Object.fromEntries(instrumentedLines.map((line) => [line, code[line - 1].trim()]))
-      const plan = await requestModel('analyze', { concern: body.concern, source, debugSource, recordableLines, sketchBindings })
+      const recordableStates = body.stepping === 'line' ? [] : fsmSites(source)
+      const semantic = recordableStates.length > 0
+      const { lines: instrumentedLines, sketchBindings } = instrument(source, semantic)
+      const input = { concern: body.concern, source, debugSource, sketchBindings }
+      const key = semantic ? 'site' : 'line'
+      const kind = semantic ? 'states' : 'lines'
+      const sites = new Set(semantic ? recordableStates.map(({ site }) => site) : instrumentedLines)
+      if (semantic) input.recordableStates = recordableStates
+      else {
+        const code = sourceLines(source)
+        input.recordableLines = Object.fromEntries(instrumentedLines.map((line) => [line, code[line - 1].trim()]))
+      }
+      const plan = await requestModel('analyze', input)
       if (!Number.isInteger(plan.cycleCount) || plan.cycleCount < 1 || plan.cycleCount > MAX_CYCLES
         || typeof plan.cycleReason !== 'string' || !plan.cycleReason.trim()) {
         return respond(502, { error: 'AI 응답에서 볼 사이클 수를 확인할 수 없어요.' })
       }
-      if (!Array.isArray(plan.lines) || plan.lines.some((item) => !validIterationRange(item?.range))) {
+      if (!Array.isArray(plan[kind]) || plan[kind].some((item) => !validIterationRange(item?.range))) {
         return respond(502, { error: 'AI 응답에서 볼 반복 범위를 확인할 수 없어요.' })
       }
-      const lines = [...new Map(plan.lines.filter(({ line }) => Number.isInteger(line) && Object.hasOwn(recordableLines, line))
-        .map((item) => [item.line, item])).values()].slice(0, 12)
+      const selections = [...new Map(plan[kind].filter((item) => sites.has(item[key]))
+        .map((item) => [item[key], item])).values()].slice(0, 12)
       const historyRef = { id: history.id, startedAt: history.startedAt }
       return respond(200, { summary: plan.summary, cycleCount: plan.cycleCount, cycleReason: plan.cycleReason,
-        lines, source: 'ai', historyRef })
+        [kind]: selections, source: 'ai', historyRef })
     } catch (error) {
       failure = { name: error.name, message: error.message }
       if (controller.signal.aborted) return

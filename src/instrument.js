@@ -2,7 +2,7 @@ import { parse } from 'acorn'
 import { fullAncestor } from 'acorn-walk'
 import { analyze } from 'eslint-scope'
 
-export function instrument(source) {
+export function instrument(source, fsm = false) {
   const options = { ecmaVersion: 2024, sourceType: 'script' }
   const tree = parse(source, {
     ...options, locations: true, ranges: true, preserveParens: true, allowReturnOutsideFunction: true,
@@ -12,21 +12,21 @@ export function instrument(source) {
   while (source.includes(hook)) hook += '_'
   const edits = []
   const lines = new Set()
-  const insert = (at, text, order = 0) => edits.push({ at, text, order })
+  const insert = (at, text, order = 0, end = at) => edits.push({ at, text, order, end })
   const readersByScope = new Map()
 
   function readers(ancestors) {
     const owner = ancestors.findLast((node) => scopes.acquire(node))
     const scope = scopes.acquire(owner, true)
     if (!readersByScope.has(scope)) {
-      const names = new Set()
+      const names = new Map()
       for (let current = scope; current; current = current.upper) {
         for (const variable of current.variables) {
-          if (variable.defs.length) names.add(variable.name)
+          if (variable.defs.length && !names.has(variable.name)) names.set(variable.name, current !== scopes.globalScope)
         }
       }
-      readersByScope.set(scope, '()=>[' + [...names].map((name) =>
-        `[${JSON.stringify(name)},()=>${name}]`).join(',') + ']')
+      readersByScope.set(scope, '()=>[' + [...names].map(([name, local]) =>
+        `[${JSON.stringify(name)},()=>${name}${fsm && local ? ',true' : ''}]`).join(',') + ']')
     }
     return readersByScope.get(scope)
   }
@@ -62,6 +62,24 @@ export function instrument(source) {
   fullAncestor(tree, (node, _, ancestors) => {
     const parent = ancestors.at(-2)
     const line = node.loc.start.line
+    if (fsm) {
+      // Collect the constraint function's return bindings without making its lines steps.
+      if (node.type === 'ReturnStatement' && node.argument) evaluated(node.argument, line, ancestors)
+      if (node.type === 'ArrowFunctionExpression' && node.expression) evaluated(node.body, node.body.loc.start.line, ancestors)
+      if (node.type === 'CallExpression' && !node.optional) {
+        const { callee } = node
+        const method = callee.property?.name
+        const fsmMethod = ['evaluate', 'dispatch'].includes(method) && callee.object?.type === 'MemberExpression'
+          && !callee.object.optional && !callee.object.computed && callee.object.property.name === 'fsm'
+        if (callee.type === 'MemberExpression' && !callee.computed && !callee.optional
+          && (fsmMethod || method === 'addObject' || method === 'addCollection')
+          && !ancestors.some((part) => part.type === 'ChainExpression')) {
+          insert(callee.start, `${hook}.fsmCall(`, 1)
+          insert(callee.object.end, `,${JSON.stringify(method)},${readers(ancestors)})`, 0, callee.end)
+        }
+      }
+      return
+    }
     switch (node.type) {
       case 'VariableDeclaration':
         if (parent.init === node || parent.left === node) break
@@ -108,12 +126,17 @@ export function instrument(source) {
     }
   })
 
+  if (fsm) {
+    const directive = tree.body.findLast((node) => node.directive)
+    insert(directive?.end ?? 0, `\n;${hook}.bind(${readers([tree])});\n`, -3)
+  }
+
   edits.sort((a, b) => a.at - b.at || a.order - b.order)
   const chunks = []
   let offset = 0
-  for (const { at, text } of edits) {
+  for (const { at, text, end } of edits) {
     chunks.push(source.slice(offset, at), text)
-    offset = at
+    offset = end
   }
   chunks.push(source.slice(offset))
   const sketchBindings = scopes.globalScope.variables.filter(({ defs }) => defs.some(({ type }) => type === 'Variable'))

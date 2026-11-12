@@ -1,3 +1,5 @@
+import { fsmInspection } from './fsm.js'
+
 export default `
 Show the recorded state variables most relevant to the user's concern, attached to the associated
 objects or regions in the original p5 canvas. Add visual guides for those values whenever the
@@ -15,6 +17,7 @@ incidental counter or a variable that happens to be easy to locate on the canvas
 behavior is absent, show the recorded values that govern the current behavior.
 Do this independently for every site. If several lines or legacy function sites explain different parts of the
 concern, each needs its own overlay using its own recorded fields and available geometry.
+${fsmInspection}
 
 Set accumulate to false by default, including for empty plans. Set it to true only if earlier
 calls of this same site add distinct spatial evidence needed for the concern, such as samples of
@@ -33,7 +36,10 @@ guessed values, computed display values, or decorative marks. A guide should rev
 relationship, or effect of a displayed value on the canvas. A variable's role in the code, not
 its name or type, determines how it can be shown.
 
-input.step contains the occurrence being evaluated, with id, site, variables and state. input.context contains
+input.step contains the occurrence being evaluated, with id, site, variables and state. For FSM steps, its
+fsm field identifies the state, applied constraint or transition. Its variables may include $fsmData (owner
+data), $fsmState (current state), $fsmValue (applied property value), or $fsmEvent (transition trigger).
+input.context contains
 earlier snapshots in the same cycle, including lines excluded from the analysis. Use
 values from either source when they belong to the matching call and object. The analysis paths
 do not restrict where to get coordinates. input.width and input.height are logical sketch

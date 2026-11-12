@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Editor } from './components/Editor.jsx'
+import { FsmDiagrams } from './components/FsmDiagrams.jsx'
 import { Icon } from './components/Icon.jsx'
 import { Preview } from './components/Preview.jsx'
 import { RuntimeState } from './components/RuntimeState.jsx'
@@ -140,13 +141,15 @@ function App() {
     try {
       const body = { concern: prompt }
       if (task === 'edit') Object.assign(body, { source, debugSource })
-      if (task === 'analyze') Object.assign(body, { source: run.source, debugSource: run.debugSource })
+      const fsm = Boolean(recorded.at(-1)?.fsm)
+      if (task === 'analyze') Object.assign(body, { source: run.source, debugSource: run.debugSource,
+        stepping: fsm ? 'fsm' : 'line' })
       if (task === 'overlay') {
         const evidence = await overlayEvidence(inspector.matches, inspector.report, step, inspector.overlayContextFor, controller.signal)
         if (!evidence.length) return
         Object.assign(body, { source: run.source, debugSource: run.debugSource, evidence })
       }
-      const result = task === 'analyze' && !enabled ? localPlan(prompt, run.source)
+      const result = task === 'analyze' && !enabled ? localPlan(prompt, run.source, fsm)
         : await request(task, body, controller.signal)
       if (controller.signal.aborted) return
       if (task === 'generate') {
@@ -248,8 +251,8 @@ function App() {
         {requestNotice && <p className="request-notice" role="status">{requestNotice}</p>}
       </form>
       <div className="workspace">
-        <Editor source={source} debugSource={debugSource} setSource={changeSource} file={sketch.file}
-          line={inspector.live ? null : step?.line} endLine={step?.endLine}
+        <Editor source={source} execution={run} setSource={changeSource} file={sketch.file}
+          line={inspector.live ? null : step?.line} endLine={step?.fsm?.kind === 'state' ? step.line : step?.endLine}
           dirty={source !== run.source || debugSource !== run.debugSource}
           run={() => restart(source, debugSource)} />
         <div className="inspection" inert={busy === 'analyze' || busy === 'overlay' ? true : undefined}>
@@ -257,6 +260,7 @@ function App() {
             onGenerateOverlay={() => perform('overlay')} onCloseOverlay={() => setOverlay(null)}
             onReset={() => restart(run.source, run.debugSource)} />
           <p className="canvas-hint">{sketch.hint}</p>
+          <FsmDiagrams source={source} step={!inspector.live && source === run.source ? step : undefined} />
           <RuntimeState step={step} report={inspector.report} />
         </div>
       </div>

@@ -1,5 +1,7 @@
 import p5Url from 'p5/lib/p5.min.js?url&no-inline'
 import { instrument } from './instrument.js'
+import { createFsmTypes } from './fsm.js'
+import { fsmSites } from './fsmDiagram.js'
 import { createRecorder, TRACE_BATCH_SIZE } from './recorder.js'
 import { createCanvasTrace, MAX_DRAWING_COMMANDS, MAX_DRAWING_WINDOWS, MAX_DRAWING_BYTES } from './canvasTrace.js'
 
@@ -7,7 +9,7 @@ export const WIDTH = 720
 export const HEIGHT = 390
 
 // Serialized into an opaque-origin iframe. Keep this function self-contained.
-function boot(source, hook, batchSize, width, height, createRecorder, createCanvasTrace, drawingLimit, windowLimit, drawingBytes, restored) {
+function boot(source, batchSize, width, height, createRecorder, createCanvasTrace, createFsmTypes, drawingLimit, windowLimit, drawingBytes, restored, sites) {
   const send = (message) => parent.postMessage(message, '*')
   const copy = (value) => JSON.parse(JSON.stringify(value))
   let event = 'setup'
@@ -41,7 +43,7 @@ function boot(source, hook, batchSize, width, height, createRecorder, createCanv
     event, preview,
     get canvasCursor() { return drawing?.cursor() },
     get canvasSize() { return sketch?.canvas && sketch.width > 0 && sketch.height > 0 ? [sketch.width, sketch.height] : undefined },
-  }), batchSize)
+  }), batchSize, sites)
 
   function snapshot() {
     try {
@@ -56,7 +58,9 @@ function boot(source, hook, batchSize, width, height, createRecorder, createCanv
 
   new p5((p) => {
     sketch = p
-    new Function('p', 'trace', hook, source + '\n//# sourceURL=sketch-user.js')(p, trace, recorder)
+    const types = createFsmTypes(sites.length ? recorder : undefined)
+    const createSketch = new Function(...Object.keys(types), source + '\n//# sourceURL=sketch-user.js')
+    createSketch(...Object.values(types))(p, trace, recorder)
     const setup = p.setup
     const draw = p.draw
     const redraw = trace.render ?? draw
@@ -203,16 +207,23 @@ function boot(source, hook, batchSize, width, height, createRecorder, createCanv
 
 export function frameDocument(source, debugSource = '', restored = null) {
   const library = new URL(p5Url, window.location.href).href
-  const compiled = instrument(source)
+  const sites = fsmSites(source)
+  const compiled = instrument(source, Boolean(sites.length))
   const attached = debugSource.trim() ? `\n;(function () {\n${debugSource}\n}).call(p)` : ''
   const scriptData = (value) => JSON.stringify(value).replaceAll('<', '\\u003c')
-  const executable = compiled.source + attached
+  const executable = `return function (p, trace, ${compiled.hook}) {\n${compiled.source}${attached}\n}`
   // Validate the combined script before replacing the running preview.
-  new Function('p', 'trace', compiled.hook, executable)
-  const code = scriptData(executable)
-  return `<!doctype html><html><head>
+  new Function(executable)
+  const args = [
+    scriptData(executable), TRACE_BATCH_SIZE, WIDTH, HEIGHT, createRecorder.toString(),
+    createCanvasTrace.toString(), createFsmTypes.toString(), MAX_DRAWING_COMMANDS, MAX_DRAWING_WINDOWS,
+    MAX_DRAWING_BYTES, scriptData(restored), scriptData(sites),
+  ]
+  const runtime = `(${boot.toString()})(\n${args.join(',\n')}\n)`
+  const document = `<!doctype html><html><head>
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' ${library}; style-src 'unsafe-inline'; img-src data: blob:">
     <style>html,body{margin:0;overflow:hidden;background:#efede7}canvas{display:block;width:100%!important;height:auto!important;outline:none;touch-action:none}</style>
     <script src="${library}"></script>
-    </head><body><script>(${boot.toString()})(${code},${JSON.stringify(compiled.hook)},${TRACE_BATCH_SIZE},${WIDTH},${HEIGHT},${createRecorder.toString()},${createCanvasTrace.toString()},${MAX_DRAWING_COMMANDS},${MAX_DRAWING_WINDOWS},${MAX_DRAWING_BYTES},${scriptData(restored)})</script></body></html>`
+    </head><body><script>${runtime}</script></body></html>`
+  return { document, executable, runtime, library }
 }

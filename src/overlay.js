@@ -1,14 +1,14 @@
 import { parse } from 'acorn'
 import { simple } from 'acorn-walk'
 
-export const overlaySite = (step) => step.functionId ?? -step.line
+export const overlaySite = (step) => step.site ?? step.functionId ?? -step.line
 
 export function overlaySnapshot(step) {
   const variables = Object.fromEntries(Object.entries(step.variables ?? {}).flatMap(([name, value]) => {
     try { return [[name, JSON.parse(value)]] } catch { return [] }
   }))
-  const { id, cycle, event, label, line, endLine, canvasSize, state } = step
-  return { id, site: overlaySite(step), cycle, event, label, line, endLine, canvasSize, variables, state }
+  const { id, cycle, event, label, line, endLine, canvasSize, state, fsm } = step
+  return { id, site: overlaySite(step), cycle, event, label, line, endLine, canvasSize, variables, state, fsm }
 }
 
 export function overlayOccurrences(steps, selected, accumulate, width, height) {
@@ -70,8 +70,8 @@ export function overlayLabels(marks, { step, context, width, height }) {
   return marks.slice(0, 8).flatMap((mark) => {
     const { x, y, fields, guides } = mark ?? {}
     if (![x, y].every(Number.isFinite) || x < 0 || x > width || y < 0 || y > height || !Array.isArray(fields)) return []
-    const labels = new Set()
-    const visibleFields = new Set()
+    const labels = new Map()
+    const visibleFields = new Map()
     for (const [index, field] of fields.slice(0, 6).entries()) {
       if (!Array.isArray(field)) continue
       const [scope, path, id = step.id] = field
@@ -82,16 +82,41 @@ export function overlayLabels(marks, { step, context, width, height }) {
       const name = path.map((key, index) => /^[\p{ID_Start}_$][\p{ID_Continue}$]*$/u.test(key)
         ? (index ? '.' : '') + key
         : `[${JSON.stringify(key)}]`).join('')
-      labels.add(`${name}: ${display}`)
-      visibleFields.add(index)
+      const key = JSON.stringify([scope, path.map(String)])
+      labels.set(JSON.stringify([key, display]), { key, name, value: display })
+      visibleFields.set(index, key)
     }
     if (!labels.size) return []
     const visibleGuides = Array.isArray(guides) ? guides.slice(0, 16).flatMap((guide) => {
       const geometry = visibleFields.has(guide?.field) && overlayGuide(guide, width, height)
-      return geometry ? [geometry] : []
+      return geometry ? [{ ...geometry, fieldKey: visibleFields.get(guide.field) }] : []
     }) : []
-    return [{ x, y, labels: [...labels], guides: visibleGuides }]
+    return [{ x, y, labels: [...labels.values()], guides: visibleGuides }]
   })
+}
+
+const guideColors = ['#8cf4c8', '#ffd278', '#8ecbff', '#ff9fc8', '#d3ee82', '#c9b3ff', '#ffab89', '#82e8f2']
+
+export function overlayColors(guides) {
+  const colors = new Map()
+  const used = new Set()
+  for (const { fieldKey, color } of guides) {
+    if (!colors.has(fieldKey)) colors.set(fieldKey, undefined)
+    const accent = color?.slice(0, 7).toLowerCase()
+    if (accent && !colors.get(fieldKey) && !used.has(accent)) {
+      colors.set(fieldKey, accent)
+      used.add(accent)
+    }
+  }
+  let index = 0
+  for (const [fieldKey, color] of colors) {
+    if (color) continue
+    while (used.has(guideColors[index])) index++
+    const accent = guideColors[index] ?? `hsl(${(index * 137.508) % 360} 85% 76%)`
+    colors.set(fieldKey, accent)
+    index++
+  }
+  return colors
 }
 
 function sampleSnapshot(snapshot, paths, budget) {
@@ -132,14 +157,15 @@ export async function overlayEvidence(steps, report, current, loadContext, signa
     if (!groups.has(site)) groups.set(site, [])
     groups.get(site).push(step)
   }
-  return Promise.all([...groups.values()].slice(0, 16).flatMap((group) => {
-    const samples = new Set([group.find(({ id }) => id === current?.id), group.at(-1), group[0]])
-    return [...samples].filter(Boolean).slice(0, 2).map(async (step) => {
-      const paths = annotations.get(step.id)
-      const rows = await loadContext(step, false, signal)
-      const context = overlayContext(rows, step, 4).map((snapshot) => sampleSnapshot(snapshot, [], 750))
-      return { ...sampleSnapshot(overlaySnapshot(step), paths, 5000), paths, context }
-    })
+  const samples = [...groups.values()].filter((group) => group.length).slice(0, 32).map((group) =>
+    [...new Set([group.find(({ id }) => id === current?.id), group.at(-1), group[0]])].filter(Boolean))
+  const primary = samples.map(([step]) => step)
+  const secondary = samples.flatMap(([, step]) => step ? [step] : []).slice(0, 32 - primary.length)
+  return Promise.all([...primary, ...secondary].map(async (step) => {
+    const paths = annotations.get(step.id)
+    const rows = await loadContext(step, false, signal)
+    const context = overlayContext(rows, step, 4).map((snapshot) => sampleSnapshot(snapshot, [], 750))
+    return { ...sampleSnapshot(overlaySnapshot(step), paths, 5000), paths, context }
   }))
 }
 

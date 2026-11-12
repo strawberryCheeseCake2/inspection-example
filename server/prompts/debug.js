@@ -1,5 +1,5 @@
 export default `
-The source field is a standalone p5.js instance-mode sketch with injected p. Define p.setup
+The source field is a p5.js instance-mode sketch with injected p and shared FSM types. Define p.setup
 with p.createCanvas(720, 390) and the callbacks the artwork needs. Keep all debugger-only variables
 and code in debugSource, a separate attachment evaluated after source with access to its bindings.
 Removing the attachment must leave the artwork working the same way.
@@ -17,8 +17,8 @@ may expose a compact JSON representation with the metadata needed to interpret i
 
 Choose a cycle based on the sketch behavior. In debugSource set trace.cycle to 'frame' for an
 update pass, 'event' for an individual input callback, or { start: 'mousePressed', end: 'mouseReleased' }
-for a complete drag. During the active cycle the inspector automatically records executable lines
-in source and the declared bindings visible there. Do not add trace.label, trace.step, or trace.watch.
-The later debugging analysis selects relevant lines and variables for its own query.
+for a complete drag. During the active cycle the inspector records FSM state visits, each applied
+constraint in order, and matched transitions with their runtime variables. For sketches without
+FSM declarations, it records executable lines. Do not add trace.label, trace.step, or trace.watch.
 Drawing tools start blank and add marks from real user input.
 `
